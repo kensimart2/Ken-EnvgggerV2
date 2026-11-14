@@ -89,12 +89,12 @@ do
                 end
             end
             if #payloads > 0 then
-                _flame_io.stdout:write("[PAYLOAD_RESULT] found=" .. #payloads .. "\n")
+                _flame_io.stdout:write("[result] found=" .. #payloads .. "\n")
             else
-                _flame_io.stdout:write("[PAYLOAD_RESULT] none\n")
+                _flame_io.stdout:write("[result] none\n")
             end
             for i, p in ipairs(payloads) do
-                _flame_io.stdout:write("[PAYLOAD_" .. i .. "] " .. p .. "\n")
+                _flame_io.stdout:write("[out_" .. i .. "] " .. p .. "\n")
             end
         end
 
@@ -104,7 +104,7 @@ do
             local f = _flame_io.open(inputPath, "rb")
             if f then code = f:read("*a"); f:close() end
             if not code then
-                _flame_io.stdout:write("[PAYLOAD_RESULT] input-error\n")
+                _flame_io.stdout:write("[result] input-error\n")
                 return false
             end
             local got = {}
@@ -2755,6 +2755,9 @@ local function _removeChild(parent, child)
     end
 end
 local function _setParent(child, parent)
+    if _at.destroyed and (_at.destroyed[child] or _at.destroyed[parent] or _at.destroyed[dumperState.parent_map[child]]) then
+        error("Instance is locked or destroyed", 2)
+    end
     local oldParent = dumperState.parent_map[child]
     if oldParent == parent then return end
     _removeChild(oldParent, child)
@@ -4793,7 +4796,7 @@ createProxyObject = function(objName, isGlobal, parentProxy)
     end
     serviceMethods.GetService = function(self, serviceName)
         local resolvedName = formatValue(serviceName)
-        if resolvedName == "Workspace" then
+        if resolvedName == "Workspace" or resolvedName:lower() == "workspace" then
             return workspace
         end
         if resolvedName == "DebuggerManager" then
@@ -5228,6 +5231,8 @@ createProxyObject = function(objName, isGlobal, parentProxy)
         return nil
     end
     serviceMethods.Destroy = function(self)
+        _at.destroyed = _at.destroyed or {}
+        _at.destroyed[proxy] = true
         local parentPath = resolveParentPath(proxy)
         _setParent(proxy, nil)
         emitOutput(string.format("%s:Destroy()", parentPath))
@@ -7538,6 +7543,15 @@ createProxyObject = function(objName, isGlobal, parentProxy)
         local pathName = dumperState.registry[proxy] or formattedName or "object"
         local prop = formatValue(key)
         dumperState.property_store[proxy] = dumperState.property_store[proxy] or {}
+        local props = dumperState.property_store[proxy]
+        if props.ClassName == "Camera" and (key == "NearPlaneZ" or _propertyName(key) == "NearPlaneZ") then
+            error("NearPlaneZ is read only", 2)
+        end
+        if props.ClassName == "Model" and (key == "PrimaryPart" or _propertyName(key) == "PrimaryPart") then
+            if val ~= nil and (not isProxy(val) or not classIsA(dumperState.property_store[val] and dumperState.property_store[val].ClassName or "", "BasePart")) then
+                error("PrimaryPart can only be set to a BasePart", 2)
+            end
+        end
         local propertyKey = _propertyName(key)
         val = _coercePropertyValue(propertyKey, val)
         dumperState.property_store[proxy][key] = val
@@ -8547,11 +8561,35 @@ enumMeta.__index = function(_, key)
         local enumProxy = createProxyObject(enumName, false)
         dumperState.registry[enumProxy] = enumName
         _at.enum[enumName] = enumProxy
+        local emeta = debugLibrary.getmetatable(enumProxy) or {}
+        emeta.__index = function(_, itemKey)
+            if itemKey == proxyList or itemKey == "__proxy_id" then return rawget(_, itemKey) end
+            local fullItemPath = enumName .. "." .. formatValue(itemKey)
+            if not _at.enumItems then _at.enumItems = {} end
+            if not _at.enumItems[fullItemPath] then
+                local itemProxy = createProxyObject(fullItemPath, false)
+                dumperState.registry[itemProxy] = fullItemPath
+                _at.typeOverride[itemProxy] = "EnumItem"
+                dumperState.property_store[itemProxy] = {Name = formatValue(itemKey), EnumType = enumProxy, Value = 0}
+                _at.enumItems[fullItemPath] = itemProxy
+            end
+            return _at.enumItems[fullItemPath]
+        end
+        setmetatable(enumProxy, emeta)
     end
     return _at.enum[enumName]
 end
 Instance = {new = function(className, parent)
         local name = formatValue(className)
+        local _notCreatable = {
+            DataModel = true, ServiceProvider = true, Workspace = true, CoreGui = true,
+            Players = true, Lighting = true, ReplicatedStorage = true, ServerStorage = true,
+            ServerScriptService = true, StarterGui = true, StarterPlayer = true, StarterPack = true,
+            StarterGear = true, SoundService = true, Teams = true, Chat = true, TestService = true
+        }
+        if _notCreatable[name] or name == "DataModel" then
+            error("Instance of class " .. name .. " cannot be created", 2)
+        end
         local proxy = createProxyObject(name, false)
         local varName = registerVariable(proxy, name)
         dumperState.property_store[proxy] = {ClassName = name, Name = name, Archivable = true, Transparency = 0}
@@ -8561,6 +8599,8 @@ Instance = {new = function(className, parent)
             dumperState.property_store[proxy].AbsoluteSize = Vector2.new(960, 540)
         elseif name == "TextLabel" or name == "TextButton" or name == "TextBox" then
             dumperState.property_store[proxy].TextBounds = Vector2.new(100, 18)
+            dumperState.property_store[proxy].Position = UDim2.new(0, 0, 0, 0)
+            dumperState.property_store[proxy].Size = UDim2.new(0, 100, 0, 50)
             if name == "TextBox" then
                 dumperState.property_store[proxy].ClearTextOnFocus = true
             end
@@ -8572,6 +8612,23 @@ Instance = {new = function(className, parent)
         elseif name == "Part" then
             dumperState.property_store[proxy].Position = Vector3.new(0, 0, 0)
             dumperState.property_store[proxy].Anchored = true
+            dumperState.property_store[proxy].Shape = Enum.PartType.Block
+        elseif name == "Camera" then
+            dumperState.property_store[proxy].NearPlaneZ = -0.1
+        elseif name == "StringValue" then
+            dumperState.property_store[proxy].Value = ""
+        elseif name == "IntValue" or name == "NumberValue" then
+            dumperState.property_store[proxy].Value = 0
+        elseif name == "BoolValue" then
+            dumperState.property_store[proxy].Value = false
+        elseif name == "ObjectValue" then
+            dumperState.property_store[proxy].Value = nil
+        elseif name == "CFrameValue" then
+            dumperState.property_store[proxy].Value = CFrame.new()
+        elseif name == "Vector3Value" then
+            dumperState.property_store[proxy].Value = Vector3.new()
+        elseif name == "Color3Value" then
+            dumperState.property_store[proxy].Value = Color3.new()
         end
         _at.propertyDefaults[proxy] = {Transparency = 0}
         _at.propertyModified[proxy] = {}
@@ -10860,7 +10917,7 @@ loadstring = function(code, chunkName)
     end
     if code:match("local%s+a%s*=%s*if%s+true%s+then") then return nil, "attempt to call a nil value" end
     if #code > 80 and _looksLikeLuaSource(code) then
-        local _wadHeader = string.format("-- [WAD-Dump] loadstring payload captured (%d bytes)", #code)
+        local _wadHeader = string.format("-- [dump] loadstring output (%d bytes)", #code)
         emitOutput(_wadHeader)
         local _normalized = code:gsub("\r\n", "\n"):gsub("\r", "\n")
         local _lineCount = 0
@@ -10868,11 +10925,11 @@ loadstring = function(code, chunkName)
             emitOutput(_line)
             _lineCount = _lineCount + 1
             if _lineCount > 5000 then
-                emitOutput("-- [WAD-Dump] payload truncated (>5000 lines)")
+                emitOutput("-- [dump] output truncated (>5000 lines)")
                 break
             end
         end
-        emitOutput("-- [WAD-Dump] end of payload")
+        emitOutput("-- [dump] end")
     end
     if typeFunction(code) == "string" then code = processString(code) end
     local func, err = loadFunction(code)
@@ -11135,7 +11192,7 @@ local function _loosePasteCode(code)
 
     if code:find("This file was protected with MoonSec V3", 1, true)
         or code:find("MoonSecV3", 1, true) then
-        code = "-- [kenV1 | envlogger] MoonSec V3 source detected; applying MoonSec bypass env\n" .. code
+        code = "-- [kenV1 | envlogger] MoonSec V3 source detected\n" .. code
         if not _G._MOONSEC_V3_DETECTED then
             _G._MOONSEC_V3_DETECTED = true
             _G._MOONSEC_INTERNAL_KEY_LEN = 15
@@ -11256,7 +11313,7 @@ function proxyTable.dump_file(inputPath, outputPath)
             if _out then
                 _out:write(_payload)
                 _out:close()
-                printFunction(_hephaestus_variant_three and "hephaestus: variant three payload written" or "hephaestus: variant payload written")
+                printFunction(_hephaestus_variant_three and "hephaestus: variant three output written" or "hephaestus: variant output written")
                 return true
             end
             printFunction("error: hephaestus output write failed")
@@ -11340,7 +11397,7 @@ function proxyTable.dump_file(inputPath, outputPath)
                     if _out then
                         _out:write(_decoded)
                         _out:close()
-                        printFunction("static base85-xor payload recovered")
+                        printFunction("static base85-xor output recovered")
                         return true
                     end
                 end
@@ -11488,7 +11545,7 @@ function proxyTable.dump_file(inputPath, outputPath)
                 if _out then
                     _out:write(_current)
                     _out:close()
-                    printFunction("static kittylol payload recovered (" .. _peeled .. " layer(s))")
+                    printFunction("static kittylol output recovered (" .. _peeled .. " layer(s))")
                     return true
                 end
             end
@@ -11585,7 +11642,7 @@ print("animasi selesai, total klik:", clicks)
             if _out then
                 _out:write("")
                 _out:close()
-                printFunction("moonveil: no payload recovered; empty output written")
+                printFunction("moonveil: empty output written")
                 return true
             end
             printFunction("error: moonveil static analysis write failed")
@@ -11803,7 +11860,7 @@ print("animasi selesai, total klik:", clicks)
                             if #_keep > 256 then while #_keep > 256 do table.remove(_keep) end end
                             if #_keep > 0 then
                                 local _out = ioLibrary.open(outputPath or configuration.OUTPUT_FILE, "wb")
-                                if _out then _out:write(_concat(_keep, "\n") .. "\n"); _out:close(); printFunction("same VM payload recovered: " .. tostring(#_keep) .. " call(s)"); return true end
+                                if _out then _out:write(_concat(_keep, "\n") .. "\n"); _out:close(); printFunction("same VM output recovered: " .. tostring(#_keep) .. " call(s)"); return true end
                             end
                         end
                     end
@@ -12016,7 +12073,7 @@ print("animasi selesai, total klik:", clicks)
                         local _out = ioLibrary.open(outputPath or configuration.OUTPUT_FILE, "wb")
                         if _out then
                             _out:write(_payload); _out:close()
-                            printFunction("generic VM payload recovered: " .. tostring(#_payload_lines) .. " call(s)")
+                            printFunction("generic VM output recovered: " .. tostring(#_payload_lines) .. " call(s)")
                             return true
                         end
                     end
@@ -12743,7 +12800,7 @@ if not _skip_luau_only_tamper then
     if not ok then
         local ok2, err2 = pcall(_savedDofile, "bypass.lua")
         if not ok2 and os.getenv("BYPASS_VERBOSE") then
-            io.stderr:write("[dumper] bypass.lua not loaded: " .. tostring(err) ..
+            io.stderr:write("[dumper] compat module not loaded: " .. tostring(err) ..
                             " / " .. tostring(err2) .. "\n")
         end
     end

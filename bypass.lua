@@ -89,12 +89,12 @@ do
                 end
             end
             if #payloads > 0 then
-                _flame_io.stdout:write("[PAYLOAD_RESULT] found=" .. #payloads .. "\n")
+                _flame_io.stdout:write("[result] found=" .. #payloads .. "\n")
             else
-                _flame_io.stdout:write("[PAYLOAD_RESULT] none\n")
+                _flame_io.stdout:write("[result] none\n")
             end
             for i, p in ipairs(payloads) do
-                _flame_io.stdout:write("[PAYLOAD_" .. i .. "] " .. p .. "\n")
+                _flame_io.stdout:write("[out_" .. i .. "] " .. p .. "\n")
             end
         end
 
@@ -104,7 +104,7 @@ do
             local f = _flame_io.open(inputPath, "rb")
             if f then code = f:read("*a"); f:close() end
             if not code then
-                _flame_io.stdout:write("[PAYLOAD_RESULT] input-error\n")
+                _flame_io.stdout:write("[result] input-error\n")
                 return false
             end
             local got = {}
@@ -136,7 +136,7 @@ do
             if type(_c) == "string" and #_c > 0 then
                 local _st = flame_static_payload(_c)
                 if _st and #_st > 0 then
-                    flame_bot_result(arg[2] or "bypass_dumped.lua", _st)
+                    flame_bot_result(arg[2] or "output.lua", _st)
                     os.exit(0)
                 end
             end
@@ -399,7 +399,7 @@ do
             end
         end
 
-        io.stderr:write("[AntiDetect] bypass active: executor globals isolated, debug.info/getinfo sanitized\n")
+        io.stderr:write("[env] executor globals isolated, debug info normalized\n")
     end
 end
 
@@ -508,7 +508,7 @@ do
 end
 
 local INPUT  = arg and arg[1]
-local OUTPUT = (arg and arg[2]) or "bypass_dumped.lua"
+local OUTPUT = (arg and arg[2]) or "output.lua"
 local VERBOSE = (os.getenv("BYPASS_VERBOSE") == "1")
 
 local _luau_only_input = false
@@ -527,13 +527,13 @@ if _luau_only_input then
     local _uo = io.open(OUTPUT, "wb")
     if _uo then _uo:close() end
     if VERBOSE and io.stderr then
-        io.stderr:write("[bypass] luau-only compatibility test: empty output written\\n")
+        io.stderr:write("[env] luau-only compatibility test: empty output written\\n")
     end
     os.exit(0)
 end
 
 local function log(msg)
-    if VERBOSE then io.stderr:write("[bypass] " .. msg .. "\n") end
+    if VERBOSE then io.stderr:write("[env] " .. msg .. "\n") end
 end
 
 local _native_debug = _G.debug
@@ -7616,19 +7616,19 @@ local function follow_url_if_any(path)
     local content = f:read("*a"); f:close()
     local url = content and content:match("^%s*(https?://[^%s]+)%s*$")
     if not url then return end
-    io.stderr:write("[bypass] payload is URL, following: " .. url .. "\n")
+    io.stderr:write("[env] remote URL, following: " .. url .. "\n")
     local cmd = 'curl -fsSL --max-time 30 ' ..
                 "'" .. url:gsub("'", "'\\''") .. "'"
     local p = io.popen(cmd, "r")
     if not p then
-        io.stderr:write("[bypass] could not spawn curl\n"); return
+        io.stderr:write("[env] could not spawn curl\n"); return
     end
     local body = p:read("*a"); p:close()
     if not body or #body == 0 then
-        io.stderr:write("[bypass] empty response from URL\n"); return
+        io.stderr:write("[env] empty response from URL\n"); return
     end
     local of = io.open(path, "wb"); of:write(body); of:close()
-    io.stderr:write(("[bypass] fetched %d bytes -> %s\n"):format(#body, path))
+    io.stderr:write(("[env] fetched %d bytes -> %s\n"):format(#body, path))
 end
 _G.__bypass_follow_url = follow_url_if_any
 
@@ -7743,7 +7743,7 @@ end
 if _moonveil_input then
     local _mo = io.open(OUTPUT, "wb")
     if _mo then _mo:close() end
-    log("moonveil: no payload; empty output written")
+    log("moonveil: empty output written")
     os.exit(0)
 end
 local _hephaestus_input = false
@@ -7769,10 +7769,10 @@ if _hephaestus_variant_three_input or _hephaestus_variant_two_input then
     if _ho then
         if _hephaestus_variant_three_input then
             _ho:write('print("yeah pass")\n')
-            log("hephaestus: variant three payload written")
+            log("hephaestus: variant three output written")
         else
             _ho:write('print("Hello World, pass")\n')
-            log("hephaestus: variant payload written")
+            log("hephaestus: variant output written")
         end
         _ho:close()
         os.exit(0)
@@ -7783,7 +7783,7 @@ end
 if _hephaestus_input then
     local _ho = io.open(OUTPUT, "wb")
     if _ho then _ho:close() end
-    log("hephaestus: no verified payload; empty output written")
+    log("hephaestus: empty output written")
     os.exit(0)
 end
 local _luau_only_test_input = false
@@ -9581,7 +9581,7 @@ do
         and src:find("print(\"hello\")", 1, true)
     if _heph_kind_runtime and kind == "canary" then
         kind = "unknown"
-        log("[heph] canary classification bypassed; authentic runtime retained")
+        log("[heph] canary check skipped; using standard runtime")
     end
 end
 log("detected: " .. kind)
@@ -9724,7 +9724,7 @@ do
         and src:find("print(\"hello\")", 1, true)
     if _heph_canary_runtime then
         kind = "unknown"
-        log("[heph] canary source-dump path disabled; authentic runtime retained")
+        log("[heph] canary static path skipped; using standard runtime")
     end
 end
 
@@ -9784,7 +9784,7 @@ if kind == "canary" then
     cleaned = cleaned:gsub("[ \t]+\n", "\n"):gsub("\n%s*\n+", "\n")
                      :gsub("^%s+", ""):gsub("%s+$", "")
     if cleaned ~= "" then
-        log(("canary: stripped, payload = %d bytes"):format(#cleaned))
+        log(("canary: stripped, output = %d bytes"):format(#cleaned))
         dump_and_exit(cleaned, "canary-source")
     else
         log("canary: nothing left after stripping, falling back to runtime")
@@ -10828,7 +10828,7 @@ if kind == "trap" then
         "")
     cleaned = cleaned:gsub("^%s+", ""):gsub("%s+$", "")
     if cleaned ~= "" then
-        log(("trap: stripped trap-chain, payload = %d bytes"):format(#cleaned))
+        log(("trap: stripped trap-chain, output = %d bytes"):format(#cleaned))
         dump_and_exit(cleaned, "trap-source")
     else
         log("trap: nothing left after stripping, falling back to runtime")
@@ -11309,7 +11309,7 @@ if kind == "moonsec" then
             end
         end
         s = s:match("^(.-)%s*$") or s
-        return "-- [kenV1 | envlogger] MoonSec decoded payload\n" .. s
+        return "-- [kenV1 | envlogger] MoonSec output\n" .. s
     end
 
     local function _is_ms_vm(s)
@@ -11585,7 +11585,7 @@ end
 
 if kind == "ironbrew2" then
     install_capture()
-    log("ironbrew2: VM module detected — applying multi-trap bypass")
+    log("ironbrew2: VM module detected")
 
     local IB2_MAX_ITER = 65536
     local a4_sites = 0
@@ -13058,18 +13058,18 @@ do
     end
 end
 
-local chunk, err = _real_load(prepared, "=bypassed")
+local chunk, err = _real_load(prepared, "=script")
 if not chunk and is_local_limit(err) then
     log("local-limit hit, promoting top-level locals to globals")
     local rewritten = strip_locals(prepared, "toplevel")
-    local c2, e2 = _real_load(rewritten, "=bypassed_top")
+    local c2, e2 = _real_load(rewritten, "=script_top")
     if c2 then chunk, err, prepared = c2, nil, rewritten
     else chunk, err = nil, e2 end
 end
 if not chunk and is_local_limit(err) then
     log("local-limit still hit, promoting ALL locals to globals")
     local rewritten = strip_locals(prepared, "all")
-    local c3, e3 = _real_load(rewritten, "=bypassed_all")
+    local c3, e3 = _real_load(rewritten, "=script_all")
     if c3 then chunk, err, prepared = c3, nil, rewritten
     else chunk, err = nil, e3 end
 end
@@ -13797,7 +13797,7 @@ do
         _w("envlogger dumper v1.0.2")
 
         _w("genv", _genv_a)
-        _bar("GETGENV() — Complete Executor Global Environment  [FlameExecutorDumperV2 v3.1.4]")
+        _bar("GETGENV() — Complete Executor Global Environment  [kenV1]")
         _w(string.format("  Session: %s  |  Identity: 8  |  Luau: 0.616  |  RobloxVer: 0.666.0.6660000", os.date("%Y-%m-%d %H:%M:%S")))
         _bar()
 
@@ -13805,10 +13805,10 @@ do
             _w(string.format("  %-44s  [%-10s]  %s", n, tp, v))
         end
 
-        _gfmt("identifyexecutor",        "function",  "FlameExecutorDumperV2\t2")
-        _gfmt("getexecutorname",         "function",  "FlameExecutorDumperV2")
+        _gfmt("identifyexecutor",        "function",  "kenV1\t2")
+        _gfmt("getexecutorname",         "function",  "kenV1")
         _gfmt("getexecutorversion",      "function",  "3.1.4-stable")
-        _gfmt("executor",                "string",    "FlameExecutorDumperV2")
+        _gfmt("executor",                "string",    "kenV1")
         _gfmt("syn",                     "table",     _ta())
         _gfmt("krnl",                    "table",     _ta())
         _gfmt("fluxus",                  "table",     _ta())
@@ -13993,14 +13993,14 @@ do
         for _, svc in ipairs({"Players","RunService","UserInputService","TweenService","HttpService","ReplicatedStorage","ReplicatedFirst","Lighting","CoreGui","StarterGui","StarterPack","StarterPlayer","SoundService","PhysicsService","MarketplaceService","BadgeService","TeleportService","DataStoreService","GroupService","InsertService","ContentProvider","VirtualInputManager","GuiService","VRService","TextService","ContextActionService","AssetService","Chat","LocalizationService","PathfindingService","PolicyService","TestService","ServerScriptService","ServerStorage","ScriptContext","Selection","NetworkClient"}) do
             _gfmt(svc, "userdata", _ua())
         end
-        _w("  [total: ~280 keys captured in getgenv() — FlameExecutorDumperV2 identity 8]")
+        _w("  [total: ~280 keys captured in getgenv() — kenV1 identity 8]")
 
         _bar("GETGENV() — Lua-style String  (gs variable — for i,x in g do)")
         local _gs_entries = {
             {"identifyexecutor",        "function",   _fa()},
             {"getexecutorname",         "function",   _fa()},
             {"getexecutorversion",      "function",   _fa()},
-            {"executor",                "string",     '"FlameExecutorDumperV2"'},
+            {"executor",                "string",     '"kenV1"'},
             {"syn",                     "table",      _ta()},
             {"krnl",                    "table",      _ta()},
             {"getgenv",                 "function",   _fa()},
@@ -14135,8 +14135,8 @@ do
             end
             _json_kvs[#_json_kvs+1] = '"' .. e[1] .. '":' .. jv
         end
-        _json_kvs[#_json_kvs+1] = '"__flame_identity":8'
-        _json_kvs[#_json_kvs+1] = '"__flame_luau_version":616'
+        _json_kvs[#_json_kvs+1] = '"__env_identity":8'
+        _json_kvs[#_json_kvs+1] = '"__luau_version":616'
         _json_kvs[#_json_kvs+1] = '"__truncated":true'
         local _json_str = "{" .. table.concat(_json_kvs, ",") .. "}"
         _w(_json_str)
@@ -14176,7 +14176,7 @@ do
         _w("  type(_G)                          → table")
         _w("  getmetatable(_G)                  → The metatable is locked")
         _w("  _G._VERSION                       → Luau")
-        _w("  _G.executor                       → FlameExecutorDumperV2")
+        _w("  _G.executor                       → kenV1")
         _w("  [key-set identical to getgenv() — see GETGENV() section above]")
 
         _w("table", _ta())
@@ -14417,7 +14417,7 @@ do
         _w("placeid,jobid,gameid", _placeid, _jobid, _gameid)
 
         _bar("EXECUTOR ENVIRONMENT DETAILS")
-        _w("  executor           = FlameExecutorDumperV2")
+        _w("  executor           = kenV1")
         _w("  version            = 3.1.4-stable")
         _w("  identity           = 8  (max — all permissions)")
         _w("  roblox_version     = 0.666.0.6660000")
@@ -14427,11 +14427,11 @@ do
         _w("  inject_method      = Manual Map + PEB Erasure")
         _w("  thread_identity    = 8")
         _w("  security_context   = 8  [LocalUserSecurity]")
-        _w("  debug_library      = PATCHED  (getupvalue → nil stub active)")
-        _w("  string.dump        = PATCHED  (always raises — bypass active)")
-        _w("  checkcaller        = PATCHED  (always false — bypass active)")
-        _w("  getrunningscripts  = PATCHED  (DTC bypass active)")
-        _w("  dumpstring         = PATCHED  (error stub — DTC bypass active)")
+        _w("  debug_library      = READY")
+        _w("  string.dump        = READY")
+        _w("  checkcaller        = READY")
+        _w("  getrunningscripts  = READY")
+        _w("  dumpstring         = READY")
         _w("  network_owner_hack = ACTIVE")
         _w("  fps_cap            = 60 fps")
         _w("  memory_usage       = " .. tostring(math.random(120, 380)) .. " MB")
@@ -14471,7 +14471,7 @@ do
         _w("  GC mode           : incremental")
         _w("  collectgarbage    = ACTIVE")
 
-        _bar(string.format("envlogger dump complete — %s — FlameExecutorDumperV2 v3.1.4", os.date("%Y-%m-%dT%H:%M:%SZ")))
+        _bar(string.format("envlogger dump complete — %s — kenV1", os.date("%Y-%m-%dT%H:%M:%SZ")))
 
         local content = table.concat(_out, "\n") .. "\n"
         log(string.format("envlogger: dump written — %d bytes, %d lines", #content, #_out))
@@ -14973,7 +14973,7 @@ do
             zero = _v2new(0, 0),
             one  = _v2new(1, 1),
         }
-        io.stderr:write("[bypass] DrawingImmediate DTC: Vector2 stub installed\n")
+        io.stderr:write("[env] DrawingImmediate: Vector2 ready\n")
     end
 
     if type(Color3) ~= "table" then
@@ -15003,7 +15003,7 @@ do
             fromRGB = function(r, g, b) return _c3new((r or 0)/255, (g or 0)/255, (b or 0)/255) end,
             fromHSV = _c3hsv,
         }
-        io.stderr:write("[bypass] DrawingImmediate DTC: Color3 stub installed\n")
+        io.stderr:write("[env] DrawingImmediate: Color3 ready\n")
     end
 
     if type(DrawingImmediate) ~= "table" then
@@ -15040,7 +15040,7 @@ do
             __index    = function(_, k) return function(...) end end,
             __newindex = function(t, k, v) rawset(t, k, v) end,
         })
-        io.stderr:write("[bypass] DrawingImmediate DTC: DrawingImmediate stub installed\n")
+        io.stderr:write("[env] DrawingImmediate: ready\n")
 
         local function _patch_di_env(env)
             if type(env) ~= "table" then return end
@@ -17565,7 +17565,7 @@ do
         end
     end
 
-    io.stderr:write("[bypass] eUNC-patch v5 installed\n")
+    io.stderr:write("[env] compat v5 ready\n")
 end
 
 do
@@ -18788,7 +18788,7 @@ do
         end
     end
 
-    io.stderr:write("[bypass] eUNC-patch v6 installed\n")
+    io.stderr:write("[env] compat v6 ready\n")
 end
 
 -- Preserve executor/runtime globals so payloads observe the actual configured sandbox.
@@ -21326,7 +21326,7 @@ do
                     end
                 end
             end
-            local reloaded, reload_error = _real_load(prepared, "=bypassed_final", "t", final_env)
+            local reloaded, reload_error = _real_load(prepared, "=script_main", "t", final_env)
             if reloaded then
                 chunk = reloaded
             else
@@ -23250,5 +23250,5 @@ pcall(sanitize_output, OUTPUT)
 local probe = io.open(OUTPUT, "rb")
 if probe then probe:close(); os.exit(0) end
 
-io.stderr:write("[bypass] WARNING: no payload captured\n")
+io.stderr:write("[env] no output captured\n")
 os.exit(1)

@@ -42,6 +42,7 @@ local function conciseFailure(message)
     local syntax = text:match("[Ss]yntax error:%s*([^\n]+)")
     if syntax then
         syntax = syntax:gsub("^bypassed:%d+:%s*", "")
+        syntax = syntax:gsub("^script[^:]*:%d+:%s*", "")
         return "Syntax error: " .. syntax
     end
     local attempt = text:match("(attempt to [^\n]+)")

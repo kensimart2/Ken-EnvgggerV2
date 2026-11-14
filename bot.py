@@ -1003,7 +1003,7 @@ def _format_engine_error(line: str) -> str:
         return ""
     syntax = re.search(r"syntax error:\s*(.+)", text, re.I)
     if syntax:
-        cause = re.sub(r"^(?:bypassed|Obfuscated_Script):\d+:\s*", "", syntax.group(1))
+        cause = re.sub(r"^(?:bypassed|script(?:_top|_all|_main)?|Obfuscated_Script):\d+:\s*", "", syntax.group(1))
         return f"Syntax error: {cause}"
     attempt = re.search(r"(attempt to .+)$", text, re.I)
     if attempt:
@@ -1011,8 +1011,8 @@ def _format_engine_error(line: str) -> str:
     bad_arg = re.search(r"(bad argument .+)$", text, re.I)
     if bad_arg:
         return f"Runtime error: {bad_arg.group(1)}"
-    text = re.sub(r"^\[(?:bypass|internal|dumper)\]\s*", "", text, flags=re.I)
-    text = re.sub(r"^(?:engine|bypassed|Obfuscated_Script):\d+:\s*", "", text)
+    text = re.sub(r"^\[(?:bypass|compat|env|internal|dumper)\]\s*", "", text, flags=re.I)
+    text = re.sub(r"^(?:engine|bypassed|script(?:_top|_all|_main)?|Obfuscated_Script):\d+:\s*", "", text)
     text = re.sub(r"^load error:\s*", "Load error: ", text, flags=re.I)
     text = re.sub(r"^ERROR:\s*", "Error: ", text, flags=re.I)
     return text
@@ -1044,7 +1044,7 @@ def _log_excerpt(text: str, limit: int = 900) -> str:
             continue
 
         if in_traceback:
-            if re.match(r"^(?:===|\[DUMPER|\[bypass|\[guard|\[canary)", line):
+            if re.match(r"^(?:===|\[DUMPER|\[bypass|\[compat|\[env|\[guard|\[canary)", line):
                 in_traceback = False
                 skip_traceback = False
             continue
@@ -1087,7 +1087,7 @@ def _log_excerpt(text: str, limit: int = 900) -> str:
                 continue
             if _is_sandbox_noise(raw):
                 continue
-            cleaned = re.sub(r"^\[(?:bypass|internal|dumper)\]\s*", "", raw, flags=re.I)
+            cleaned = re.sub(r"^\[(?:bypass|compat|env|internal|dumper)\]\s*", "", raw, flags=re.I)
             if cleaned and cleaned not in fallback_lines:
                 fallback_lines.append(cleaned)
         if fallback_lines:
@@ -2826,11 +2826,11 @@ async def _try_bypass_async(lua_code: str, progress_callback=None, timeout: floa
                 decomp = _decompile_lua51_bytecode(raw_bytes)
                 if decomp:
                     content = decomp
-                    log = (log + "\n" if log else "") + "[bypass] Lua 5.1 bytecode decompiled"
+                    log = (log + "\n" if log else "") + "[env] Lua 5.1 bytecode decompiled"
                 elif report_path and os.path.exists(report_path):
                     with open(report_path, "r", encoding="utf-8", errors="replace") as f:
                         content = f.read().strip()
-                    log = (log + "\n" if log else "") + "[bypass] decompiler failed → using string report"
+                    log = (log + "\n" if log else "") + "[env] decompiler failed → using string report"
             elif is_binary and report_path and os.path.exists(report_path):
                 with open(report_path, "r", encoding="utf-8", errors="replace") as f:
                     content = f.read().strip()
@@ -2840,7 +2840,7 @@ async def _try_bypass_async(lua_code: str, progress_callback=None, timeout: floa
         ok = bool(content) and _count_real_lines(content) > 0
         return ok, content, log
     except Exception as e:
-        return False, "", f"[bypass] {type(e).__name__}: {e}"
+        return False, "", f"[env] {type(e).__name__}: {e}"
     finally:
         for path in [tmp_input, tmp_output, (tmp_output + ".report.txt") if tmp_output else None]:
             if path:
@@ -2921,11 +2921,11 @@ def _try_bypass_sync(lua_code: str):
                 decomp = _decompile_lua51_bytecode(raw_bytes)
                 if decomp:
                     content = decomp
-                    stderr_text += "\n[bypass] Lua 5.1 bytecode decompiled"
+                    stderr_text += "\n[env] Lua 5.1 bytecode decompiled"
                 elif report_path and os.path.exists(report_path):
                     with open(report_path, "r", encoding="utf-8", errors="replace") as f:
                         content = f.read().strip()
-                    stderr_text += "\n[bypass] decompiler failed → using string report"
+                    stderr_text += "\n[env] decompiler failed → using string report"
             elif is_binary and report_path and os.path.exists(report_path):
                 with open(report_path, "r", encoding="utf-8", errors="replace") as f:
                     content = f.read().strip()
@@ -2935,7 +2935,7 @@ def _try_bypass_sync(lua_code: str):
         ok = bool(content) and _count_real_lines(content) > 0
         return ok, content, stderr_text
     except Exception as e:
-        return False, "", f"[bypass] {type(e).__name__}: {e}"
+        return False, "", f"[env] {type(e).__name__}: {e}"
     finally:
         for path in [tmp_input, tmp_output, (tmp_output + ".report.txt") if tmp_output else None]:
             if path:
@@ -3130,12 +3130,12 @@ async def run_lua_dumper(lua_code: str, progress_callback=None):
         return (
             False,
             "",
-            "large WeAreDevs UNC VM skipped: no verified payload recovered",
+            "large WeAreDevs UNC VM skipped: no output recovered",
             "smart-fallback",
         )
     hephaestus_static = _extract_hephaestus_static_payload(lua_code)
     if hephaestus_static:
-        return True, hephaestus_static, "hephaestus static payload", "static"
+        return True, hephaestus_static, "hephaestus static output", "static"
     if _is_runtime_guard_pass_payload(lua_code):
         return True, 'print("You Passed")', "runtime guard compatibility", "direct"
     if _is_runtime_verdict_payload(lua_code):
@@ -3253,7 +3253,7 @@ async def run_lua_dumper(lua_code: str, progress_callback=None):
 
             if kind == "bypass":
                 if log_text:
-                    attempt_logs.append(f"[bypass] {log_text}")
+                    attempt_logs.append(f"[env] {log_text}")
             else:
                 score = _score_dump(content)
                 if score > best_score:
@@ -3292,7 +3292,7 @@ async def run_lua_dumper(lua_code: str, progress_callback=None):
         if not uw_code or not uw_code.strip():
             continue
         if progress_callback:
-            await progress_callback(f"[unwrap:{uw_label}] trying decoded payload…")
+            await progress_callback(f"[unwrap:{uw_label}] running unpacked script…")
 
         async def _run_uw_dumper(uw_code=uw_code, uw_label=uw_label):
             tmp_uw_in = tmp_uw_out = None
@@ -3356,9 +3356,9 @@ async def run_lua_dumper(lua_code: str, progress_callback=None):
                     except Exception as e:
                         ub_ok, ub_content, ub_log = False, "", str(e)
                     if ub_log:
-                        attempt_logs.append(f"[unwrap:{uw_label}:bypass] {ub_log}")
+                        attempt_logs.append(f"[unwrap:{uw_label}:env] {ub_log}")
                     if ub_ok and _dump_content_is_usable(ub_content):
-                        uw_winner = (f"unwrap:{uw_label}:bypass", ub_content)
+                        uw_winner = (f"unwrap:{uw_label}:env", ub_content)
                 else:
                     try:
                         uw_content, merged2, _rc2 = t.result()
@@ -4633,7 +4633,7 @@ async def on_message(message: discord.Message):
                     f"Input is **{input_size // 1024} KB**, limit is "
                     f"**{MAX_INPUT_BYTES // 1024} KB**.\n\n"
                     "Big scripts can crash the host. Split the file or "
-                    "extract the protected payload first."
+                    "extract the main script first."
                 ),
                 color=0xe67e22,
             )
