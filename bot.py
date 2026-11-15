@@ -3907,58 +3907,26 @@ def _extract_lua_cases(document: str):
 
 async def process_bundle_dump(message: discord.Message, lua_code: str, source_name: str, cases):
     started_at = time.monotonic()
-    wait_embed = discord.Embed(title="Please wait...", description=f"Preparing `{len(cases)}` test cases\nElapsed: `0.0s`", color=0x700000)
-    wait_embed.set_footer(text="kenV1 | envlogger")
-    progress_msg = await message.reply(embed=wait_embed)
-    timer_stop = asyncio.Event()
-
-    async def update_timer():
-        while not timer_stop.is_set():
-            try:
-                await asyncio.wait_for(timer_stop.wait(), timeout=4.5)
-                return
-            except asyncio.TimeoutError:
-                pass
-            elapsed = time.monotonic() - started_at
-            wait_embed.description = f"Processing `{len(cases)}` test cases\nElapsed: `{elapsed:.1f}s`"
-            try:
-                await progress_msg.edit(embed=wait_embed)
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                return
-            except Exception:
-                pass
-
-    timer_task = asyncio.create_task(update_timer())
     results = []
     outputs = []
 
     async def _bundle_progress(_detail: str):
         return None
 
-    try:
-        for index, case in enumerate(cases, 1):
-            try:
-                wait_embed.description = f"Processing case `{index}/{len(cases)}`\nElapsed: `{time.monotonic() - started_at:.1f}s`"
-                await progress_msg.edit(embed=wait_embed)
-            except Exception:
-                pass
-            try:
-                ok, dumped, log, strategy = await asyncio.wait_for(
-                    run_lua_dumper(case, _bundle_progress), timeout=DUMP_TIMEOUT_SECONDS
-                )
-                if ok and dumped and dumped.strip():
-                    outputs.append((index, _sanitize_output(_with_generated_header(dumped))))
-                    results.append({"case": index, "status": "dumped", "strategy": strategy, "lines": len(dumped.splitlines())})
-                else:
-                    results.append({"case": index, "status": "no_dump", "strategy": strategy, "error": _log_excerpt(log or "")})
-            except asyncio.TimeoutError:
-                results.append({"case": index, "status": "timeout", "error": f"timeout after {DUMP_TIMEOUT_SECONDS}s"})
-            except Exception as exc:
-                results.append({"case": index, "status": "error", "error": f"{type(exc).__name__}: {exc}"})
-    finally:
-        timer_stop.set()
-        timer_task.cancel()
-        await asyncio.gather(timer_task, return_exceptions=True)
+    for index, case in enumerate(cases, 1):
+        try:
+            ok, dumped, log, strategy = await asyncio.wait_for(
+                run_lua_dumper(case, _bundle_progress), timeout=DUMP_TIMEOUT_SECONDS
+            )
+            if ok and dumped and dumped.strip():
+                outputs.append((index, _sanitize_output(_with_generated_header(dumped))))
+                results.append({"case": index, "status": "dumped", "strategy": strategy, "lines": len(dumped.splitlines())})
+            else:
+                results.append({"case": index, "status": "no_dump", "strategy": strategy, "error": _log_excerpt(log or "")})
+        except asyncio.TimeoutError:
+            results.append({"case": index, "status": "timeout", "error": f"timeout after {DUMP_TIMEOUT_SECONDS}s"})
+        except Exception as exc:
+            results.append({"case": index, "status": "error", "error": f"{type(exc).__name__}: {exc}"})
 
     archive = BytesIO()
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
@@ -3975,7 +3943,7 @@ async def process_bundle_dump(message: discord.Message, lua_code: str, source_na
     embed.add_field(name="No dump / error", value=str(failed_count), inline=True)
     embed.add_field(name="Output", value="`kenV1 | envlogger_bundle.zip`", inline=False)
     embed.set_footer(text="Each case was processed independently; source verdicts were not rewritten.")
-    await progress_msg.edit(embed=embed, attachments=[discord.File(archive, filename="kenV1 | envlogger_bundle.zip")])
+    await _reply_anim(message, embed, file=discord.File(archive, filename="kenV1 | envlogger_bundle.zip"))
 
 
 async def process_dump(message: discord.Message, lua_code: str, source_name: str):
@@ -4716,9 +4684,21 @@ _BOT_MUTEX_SOCKET = None
 
 def _ensure_single_bot_instance() -> None:
     global _BOT_INSTANCE_LOCK, _BOT_MUTEX_SOCKET
-    # 1. Kernel-enforced socket mutex on private localhost port 48291
+    test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        test_sock.settimeout(0.5)
+        test_sock.connect(("127.0.0.1", 48291))
+        test_sock.close()
+        print("[kenV1 | envlogger] Active bot instance detected on port 48291. Exiting duplicate.", flush=True)
+        sys.exit(99)
+    except (ConnectionRefusedError, socket.timeout, OSError):
+        try:
+            test_sock.close()
+        except Exception:
+            pass
+
     _BOT_MUTEX_SOCKET = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    _BOT_MUTEX_SOCKET.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+    _BOT_MUTEX_SOCKET.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         _BOT_MUTEX_SOCKET.bind(("127.0.0.1", 48291))
         _BOT_MUTEX_SOCKET.listen(1)
@@ -4726,10 +4706,9 @@ def _ensure_single_bot_instance() -> None:
         print("[kenV1 | envlogger] Socket lock: another instance is connected to Discord Gateway! Exiting duplicate.", flush=True)
         sys.exit(99)
 
-    # 2. File flock mutex
     lock_file = os.path.join(tempfile.gettempdir(), "kenv1_bot_gateway.lock")
-    _BOT_INSTANCE_LOCK = open(lock_file, "w")
     try:
+        _BOT_INSTANCE_LOCK = open(lock_file, "w")
         fcntl.flock(_BOT_INSTANCE_LOCK, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except (IOError, OSError):
         print("[kenV1 | envlogger] Flock: another instance is active! Exiting duplicate.", flush=True)

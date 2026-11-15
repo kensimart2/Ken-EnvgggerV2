@@ -60,8 +60,21 @@ def ensure_single_instance() -> None:
     """
     global _SUPERVISOR_LOCK_HANDLE, _SUPERVISOR_MUTEX_SOCKET
 
+    test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        test_sock.settimeout(0.5)
+        test_sock.connect(("127.0.0.1", 48290))
+        test_sock.close()
+        print("[supervisor] Active supervisor instance detected on port 48290. Exiting duplicate.", flush=True)
+        sys.exit(0)
+    except (ConnectionRefusedError, socket.timeout, OSError):
+        try:
+            test_sock.close()
+        except Exception:
+            pass
+
     _SUPERVISOR_MUTEX_SOCKET = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    _SUPERVISOR_MUTEX_SOCKET.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+    _SUPERVISOR_MUTEX_SOCKET.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         _SUPERVISOR_MUTEX_SOCKET.bind(("127.0.0.1", 48290))
         _SUPERVISOR_MUTEX_SOCKET.listen(1)
@@ -73,8 +86,8 @@ def ensure_single_instance() -> None:
     pid_file.write_text(str(os.getpid()), encoding="utf-8")
 
     lock_file = Path(tempfile.gettempdir()) / "kenv1_supervisor.lock"
-    _SUPERVISOR_LOCK_HANDLE = open(lock_file, "w")
     try:
+        _SUPERVISOR_LOCK_HANDLE = open(lock_file, "w")
         fcntl.flock(_SUPERVISOR_LOCK_HANDLE, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except (IOError, OSError):
         pass

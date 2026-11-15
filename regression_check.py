@@ -1,8 +1,12 @@
+import sys
+import os
+_DEPS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "deps")
+if os.path.isdir(_DEPS_PATH) and _DEPS_PATH not in sys.path:
+    sys.path.insert(0, _DEPS_PATH)
+
 import asyncio
 import ast
-import os
 import subprocess
-import sys
 from pathlib import Path
 
 import bot

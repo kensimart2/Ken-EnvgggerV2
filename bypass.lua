@@ -4959,16 +4959,18 @@ do
 end
 
 do
+    local _ei_meta_data = setmetatable({}, {__mode = "k"})
     local function _mkEnumItem(enum_type_ref, ename, iname, ival)
-        local raw = { Name = iname, Value = ival }
         local mt = {
             __type      = "EnumItem",
             __metatable = "EnumItem",
             __tostring  = function() return "Enum."..ename.."."..iname end,
+            __newindex  = function() error("EnumItem is read-only", 2) end,
             __eq        = function(a, b)
-                if type(b) == "table" then
-                    local bv = rawget(b, "Value")
-                    return bv == ival
+                if rawequal(a, b) then return true end
+                local da, db = _ei_meta_data[a], _ei_meta_data[b]
+                if da and db then
+                    return da.et_ref[1] == db.et_ref[1] and da.ename == db.ename and da.iname == db.iname and da.ival == db.ival
                 end
                 return false
             end,
@@ -4980,6 +4982,7 @@ do
             end,
         }
         local obj = setmetatable({}, mt)
+        _ei_meta_data[obj] = { et_ref = enum_type_ref, ename = ename, iname = iname, ival = ival }
         if _G._RTYPE then _G._RTYPE[obj] = "EnumItem" end
         return obj
     end
@@ -5648,6 +5651,8 @@ do
                 return et
             end
             local dyn_items = {}
+            local dyn_by_name = {}
+            local dyn_holder = { false }
             local dyn_mt = {
                 __type = "Enum",
                 __metatable = "Enum",
@@ -5656,12 +5661,16 @@ do
                 __newindex = function() error("Cannot modify Enum."..tostring(k), 2) end,
                 __index = function(_, kk)
                     if kk == "GetEnumItems" then return function(_) return dyn_items end end
-                    local item = _mkEnumItem({ false }, tostring(k), tostring(kk), 0)
+                    local sk = tostring(kk)
+                    if dyn_by_name[sk] ~= nil then return dyn_by_name[sk] end
+                    local item = _mkEnumItem(dyn_holder, tostring(k), sk, #dyn_items)
+                    dyn_by_name[sk] = item
                     dyn_items[#dyn_items+1] = item
                     return item
                 end,
             }
             local dyn = setmetatable({}, dyn_mt)
+            dyn_holder[1] = dyn
             rawset(_built, k, dyn)
             return dyn
         end,
@@ -15250,10 +15259,12 @@ do
     if not TweenInfo then
         TweenInfo = {
             new = function(t, es, ed, rc, r, dl)
+                local defStyle = (Enum and Enum.EasingStyle and Enum.EasingStyle.Quad) or nil
+                local defDir = (Enum and Enum.EasingDirection and Enum.EasingDirection.Out) or nil
                 return _mkt("TweenInfo", {
-                    Time=(tonumber(t) or 1),
-                    EasingStyle=es,
-                    EasingDirection=ed,
+                    Time=(t == nil and 1 or (tonumber(t) or 1)),
+                    EasingStyle=(es ~= nil and es or defStyle),
+                    EasingDirection=(ed ~= nil and ed or defDir),
                     RepeatCount=(tonumber(rc) or 0),
                     Reverses=(r == true),
                     DelayTime=(tonumber(dl) or 0),
@@ -17621,43 +17632,73 @@ do
     end
 
     if type(UDim2) == "table" then
-        local _u2_make = function(xs, xo, ys, yo)
+        local _u2_mt
+        local function _u2_make(xs, xo, ys, yo)
             local xud = (UDim and UDim.new) and UDim.new(xs or 0, xo or 0)
                         or setmetatable({Scale=xs or 0, Offset=xo or 0},{})
             local yud = (UDim and UDim.new) and UDim.new(ys or 0, yo or 0)
                         or setmetatable({Scale=ys or 0, Offset=yo or 0},{})
-            return setmetatable({ X=xud, Y=yud }, {
-                __type = "UDim2", __metatable = "UDim2",
-                __tostring = function(s)
-                    local xd = rawget(s,"X") or {Scale=0,Offset=0}
-                    local yd = rawget(s,"Y") or {Scale=0,Offset=0}
-                    local xsc = rawget(xd,"Scale") or 0
-                    local xof = rawget(xd,"Offset") or 0
-                    local ysc = rawget(yd,"Scale") or 0
-                    local yof = rawget(yd,"Offset") or 0
-                    return string.format("{%g, %g}, {%g, %g}", xsc, xof, ysc, yof)
-                end,
-                __index = rawget, __newindex = rawset,
-                __add = function(a, b)
-                    local ax = rawget(a,"X"); local ay = rawget(a,"Y")
-                    local bx = rawget(b,"X"); local by = rawget(b,"Y")
-                    return _u2_make(
-                        (rawget(ax,"Scale") or 0)+(rawget(bx,"Scale") or 0),
-                        (rawget(ax,"Offset") or 0)+(rawget(bx,"Offset") or 0),
-                        (rawget(ay,"Scale") or 0)+(rawget(by,"Scale") or 0),
-                        (rawget(ay,"Offset") or 0)+(rawget(by,"Offset") or 0))
-                end,
-                __sub = function(a, b)
-                    local ax = rawget(a,"X"); local ay = rawget(a,"Y")
-                    local bx = rawget(b,"X"); local by = rawget(b,"Y")
-                    return _u2_make(
-                        (rawget(ax,"Scale") or 0)-(rawget(bx,"Scale") or 0),
-                        (rawget(ax,"Offset") or 0)-(rawget(bx,"Offset") or 0),
-                        (rawget(ay,"Scale") or 0)-(rawget(by,"Scale") or 0),
-                        (rawget(ay,"Offset") or 0)-(rawget(by,"Offset") or 0))
-                end,
-            })
+            return setmetatable({ X=xud, Y=yud }, _u2_mt)
         end
+        _u2_mt = {
+            __type = "UDim2", __metatable = "UDim2",
+            __tostring = function(s)
+                local xd = rawget(s,"X") or {Scale=0,Offset=0}
+                local yd = rawget(s,"Y") or {Scale=0,Offset=0}
+                local xsc = rawget(xd,"Scale") or 0
+                local xof = rawget(xd,"Offset") or 0
+                local ysc = rawget(yd,"Scale") or 0
+                local yof = rawget(yd,"Offset") or 0
+                return string.format("{%g, %g}, {%g, %g}", xsc, xof, ysc, yof)
+            end,
+            __index = function(s, k)
+                if k == "Width" then return rawget(s, "X") end
+                if k == "Height" then return rawget(s, "Y") end
+                if k == "Lerp" then
+                    return function(_, other, alpha)
+                        local t = tonumber(alpha) or 0
+                        local ax, ay = rawget(s, "X"), rawget(s, "Y")
+                        local bx = other and rawget(other, "X") or {Scale=0, Offset=0}
+                        local by = other and rawget(other, "Y") or {Scale=0, Offset=0}
+                        return _u2_make(
+                            (rawget(ax,"Scale") or 0) + ((rawget(bx,"Scale") or 0) - (rawget(ax,"Scale") or 0)) * t,
+                            (rawget(ax,"Offset") or 0) + ((rawget(bx,"Offset") or 0) - (rawget(ax,"Offset") or 0)) * t,
+                            (rawget(ay,"Scale") or 0) + ((rawget(by,"Scale") or 0) - (rawget(ay,"Scale") or 0)) * t,
+                            (rawget(ay,"Offset") or 0) + ((rawget(by,"Offset") or 0) - (rawget(ay,"Offset") or 0)) * t
+                        )
+                    end
+                end
+                return rawget(s, k)
+            end,
+            __newindex = rawset,
+            __add = function(a, b)
+                local ax = rawget(a,"X"); local ay = rawget(a,"Y")
+                local bx = rawget(b,"X"); local by = rawget(b,"Y")
+                return _u2_make(
+                    (rawget(ax,"Scale") or 0)+(rawget(bx,"Scale") or 0),
+                    (rawget(ax,"Offset") or 0)+(rawget(bx,"Offset") or 0),
+                    (rawget(ay,"Scale") or 0)+(rawget(by,"Scale") or 0),
+                    (rawget(ay,"Offset") or 0)+(rawget(by,"Offset") or 0))
+            end,
+            __sub = function(a, b)
+                local ax = rawget(a,"X"); local ay = rawget(a,"Y")
+                local bx = rawget(b,"X"); local by = rawget(b,"Y")
+                return _u2_make(
+                    (rawget(ax,"Scale") or 0)-(rawget(bx,"Scale") or 0),
+                    (rawget(ax,"Offset") or 0)-(rawget(bx,"Offset") or 0),
+                    (rawget(ay,"Scale") or 0)-(rawget(by,"Scale") or 0),
+                    (rawget(ay,"Offset") or 0)-(rawget(by,"Offset") or 0))
+            end,
+            __eq = function(a, b)
+                local ax, ay = rawget(a, "X"), rawget(a, "Y")
+                local bx, by = rawget(b, "X"), rawget(b, "Y")
+                if not (ax and ay and bx and by) then return false end
+                return (rawget(ax,"Scale") or 0) == (rawget(bx,"Scale") or 0)
+                    and (rawget(ax,"Offset") or 0) == (rawget(bx,"Offset") or 0)
+                    and (rawget(ay,"Scale") or 0) == (rawget(by,"Scale") or 0)
+                    and (rawget(ay,"Offset") or 0) == (rawget(by,"Offset") or 0)
+            end,
+        }
         UDim2.new = function(xs, xo, ys, yo)
             local ok_xs, xs_scale = pcall(rawget, xs, "Scale")
             if ok_xs and xs_scale ~= nil and ys == nil then
@@ -19115,6 +19156,13 @@ do
             end
         end
         local function set_parent(state, new_parent)
+            if state.destroyed then
+                error("The Parent property of " .. tostring(state.props.Name or state.class_name) .. " is locked", 2)
+            end
+            local target_state = new_parent and get_state(new_parent) or nil
+            if target_state and target_state.destroyed then
+                error("Cannot parent instance to a destroyed instance", 2)
+            end
             local old_parent = state.parent
             if old_parent == new_parent then return end
             local old_state = get_state(old_parent)
@@ -19152,23 +19200,229 @@ do
             end
             return result
         end
+        local _internal_create_allowed = false
+        local _inst_not_creatable = {
+            Object=true, Instance=true, DataModel=true, PVInstance=true,
+            BasePart=true, FormFactorPart=true, TriangleMeshPart=true, PartOperation=true,
+            GuiBase=true, GuiBase2d=true, GuiBase3d=true, GuiObject=true, GuiButton=true,
+            LayerCollector=true, ValueBase=true, Constraint=true, JointInstance=true,
+            ServiceProvider=true, GenericSettings=true, UIBase=true, UIComponent=true,
+            UILayout=true, UIGridStyleLayout=true, PostEffect=true, Light=true,
+            DataModelMesh=true, Player=true, Workspace=true, CoreGui=true,
+            Players=true, Lighting=true, ReplicatedStorage=true, ReplicatedFirst=true,
+            ServerStorage=true, ServerScriptService=true, StarterGui=true,
+            StarterPlayer=true, StarterPack=true, StarterGear=true, SoundService=true,
+            Teams=true, Chat=true, Debris=true, HttpService=true, CollectionService=true,
+            MarketplaceService=true, PathfindingService=true, PhysicsService=true,
+            ContextActionService=true, TeleportService=true, Stats=true, TestService=true,
+            TextService=true, GuiService=true, TextChatService=true, AssetService=true,
+            ContentProvider=true, InsertService=true, LocalizationService=true,
+            PolicyService=true, MemoryStoreService=true, MessagingService=true,
+            DataStoreService=true, AnalyticsService=true, BadgeService=true,
+            VirtualInputManager=true, UserSettings=true, RunService=true,
+            TweenService=true, UserInputService=true,
+        }
+        local _inst_enum_props = {
+            Shape="PartType", Material="Material", CameraType="CameraType",
+            SizeConstraint="SizeConstraint", AutomaticSize="AutomaticSize",
+            BorderMode="BorderMode", ScaleType="ScaleType",
+            ZIndexBehavior="ZIndexBehavior", SortOrder="SortOrder",
+            TextXAlignment="TextXAlignment", TextYAlignment="TextYAlignment",
+            RigType="HumanoidRigType", EasingStyle="EasingStyle",
+            EasingDirection="EasingDirection",
+        }
+        local _inst_num_props = {
+            Transparency=true, Reflectance=true, Rotation=true,
+            ZIndex=true, LayoutOrder=true, BorderSizePixel=true,
+            BackgroundTransparency=true, TextSize=true, TextTransparency=true,
+            TextStrokeTransparency=true, ImageTransparency=true, LineHeight=true,
+            FieldOfView=true, WalkSpeed=true, JumpPower=true, JumpHeight=true,
+            HipHeight=true, Health=true, MaxHealth=true, MaxSlopeAngle=true,
+            Volume=true, PlaybackSpeed=true, TimePosition=true,
+            Brightness=true, ClockTime=true, Range=true, Angle=true,
+            Intensity=true, Thickness=true, Density=true, TimeScale=true,
+        }
+        local function _inst_is_a(cls, wanted)
+            if cls == wanted or wanted == "Instance" or wanted == "Object" then return true end
+            local cur = cls
+            local n = 0
+            while cur and n < 32 do
+                if cur == wanted then return true end
+                cur = _ROBLOX_SUPER[cur]
+                n = n + 1
+            end
+            return false
+        end
+        local function _inst_set_def(state, k, v)
+            state.props[k] = v
+            state.has_props[k] = true
+        end
+        local function _inst_init_defaults(cls, state)
+            local v3n = Vector3 and Vector3.new or function(x,y,z) return {X=x or 0,Y=y or 0,Z=z or 0} end
+            local v2n = Vector2 and Vector2.new or function(x,y) return {X=x or 0,Y=y or 0} end
+            local cfn = CFrame and CFrame.new or function(x,y,z) return {X=x or 0,Y=y or 0,Z=z or 0} end
+            local c3n = Color3 and Color3.new or function(r,g,b) return {R=r or 0,G=g or 0,B=b or 0} end
+            local u2n = UDim2 and UDim2.new or function(xs,xo,ys,yo) return {X={Scale=xs or 0,Offset=xo or 0},Y={Scale=ys or 0,Offset=yo or 0}} end
+            if _inst_is_a(cls, "BasePart") then
+                _inst_set_def(state, "Transparency", 0)
+                _inst_set_def(state, "Reflectance", 0)
+                _inst_set_def(state, "Anchored", false)
+                _inst_set_def(state, "CanCollide", true)
+                _inst_set_def(state, "CanTouch", true)
+                _inst_set_def(state, "CanQuery", true)
+                _inst_set_def(state, "Massless", false)
+                _inst_set_def(state, "Locked", false)
+                _inst_set_def(state, "CastShadow", true)
+                _inst_set_def(state, "Size", v3n(4, 1, 2))
+                _inst_set_def(state, "CFrame", cfn(0, 0, 0))
+                _inst_set_def(state, "Position", v3n(0, 0, 0))
+                _inst_set_def(state, "Orientation", v3n(0, 0, 0))
+                _inst_set_def(state, "Rotation", v3n(0, 0, 0))
+                _inst_set_def(state, "Color", Color3 and Color3.fromRGB(163, 162, 165) or c3n(0.64, 0.64, 0.65))
+                _inst_set_def(state, "BrickColor", BrickColor and BrickColor.new("Medium stone grey") or nil)
+                _inst_set_def(state, "Material", Enum and Enum.Material and Enum.Material.Plastic or nil)
+                _inst_set_def(state, "AssemblyLinearVelocity", v3n(0, 0, 0))
+                _inst_set_def(state, "AssemblyAngularVelocity", v3n(0, 0, 0))
+                if cls == "Part" then
+                    _inst_set_def(state, "Shape", Enum and Enum.PartType and Enum.PartType.Block or nil)
+                end
+            end
+            if _inst_is_a(cls, "GuiBase2d") then
+                _inst_set_def(state, "AbsolutePosition", v2n(0, 0))
+                _inst_set_def(state, "AbsoluteSize", (cls == "Frame" or cls == "ScrollingFrame") and v2n(960, 540) or v2n(100, 50))
+                _inst_set_def(state, "AbsoluteRotation", 0)
+                _inst_set_def(state, "AutoLocalize", true)
+            end
+            if _inst_is_a(cls, "GuiObject") then
+                _inst_set_def(state, "Position", u2n(0, 0, 0, 0))
+                _inst_set_def(state, "Size", u2n(0, 100, 0, 50))
+                _inst_set_def(state, "AnchorPoint", v2n(0, 0))
+                _inst_set_def(state, "Visible", true)
+                _inst_set_def(state, "ZIndex", 1)
+                _inst_set_def(state, "LayoutOrder", 0)
+                _inst_set_def(state, "Rotation", 0)
+                _inst_set_def(state, "BackgroundColor3", c3n(1, 1, 1))
+                _inst_set_def(state, "BackgroundTransparency", 0)
+                _inst_set_def(state, "BorderColor3", Color3 and Color3.fromRGB(27, 42, 53) or c3n(0.1, 0.16, 0.2))
+                _inst_set_def(state, "BorderSizePixel", 1)
+                _inst_set_def(state, "Active", false)
+                _inst_set_def(state, "ClipsDescendants", false)
+                _inst_set_def(state, "Selectable", false)
+                if Enum and Enum.SizeConstraint then _inst_set_def(state, "SizeConstraint", Enum.SizeConstraint.RelativeXY) end
+                if Enum and Enum.AutomaticSize then _inst_set_def(state, "AutomaticSize", Enum.AutomaticSize.None) end
+                if Enum and Enum.BorderMode then _inst_set_def(state, "BorderMode", Enum.BorderMode.Outline) end
+            end
+            if cls == "TextLabel" or cls == "TextButton" or cls == "TextBox" then
+                _inst_set_def(state, "Text", "")
+                _inst_set_def(state, "TextSize", 14)
+                _inst_set_def(state, "TextTransparency", 0)
+                _inst_set_def(state, "TextColor3", c3n(0, 0, 0))
+                _inst_set_def(state, "TextBounds", v2n(100, 18))
+                if Enum and Enum.Font then _inst_set_def(state, "Font", Enum.Font.SourceSans) end
+                if Enum and Enum.TextXAlignment then _inst_set_def(state, "TextXAlignment", Enum.TextXAlignment.Center) end
+                if Enum and Enum.TextYAlignment then _inst_set_def(state, "TextYAlignment", Enum.TextYAlignment.Center) end
+                if cls == "TextBox" then _inst_set_def(state, "ClearTextOnFocus", true) end
+            elseif cls == "Camera" then
+                _inst_set_def(state, "NearPlaneZ", -0.1)
+                _inst_set_def(state, "FieldOfView", 70)
+                _inst_set_def(state, "CFrame", cfn(0, 0, 0))
+                _inst_set_def(state, "Focus", cfn(0, 0, 0))
+                if Enum and Enum.CameraType then _inst_set_def(state, "CameraType", Enum.CameraType.Custom) end
+                _inst_set_def(state, "ViewportSize", v2n(1920, 1080))
+            elseif cls == "Model" then
+                _inst_set_def(state, "PrimaryPart", nil)
+                _inst_set_def(state, "WorldPivot", cfn(0, 0, 0))
+                state.props._scale = 1
+            elseif cls == "StringValue" then
+                _inst_set_def(state, "Value", "")
+            elseif cls == "IntValue" or cls == "NumberValue" then
+                _inst_set_def(state, "Value", 0)
+            elseif cls == "BoolValue" then
+                _inst_set_def(state, "Value", false)
+            elseif cls == "ObjectValue" then
+                _inst_set_def(state, "Value", nil)
+            elseif cls == "CFrameValue" then
+                _inst_set_def(state, "Value", cfn(0, 0, 0))
+            elseif cls == "Vector3Value" then
+                _inst_set_def(state, "Value", v3n(0, 0, 0))
+            elseif cls == "Color3Value" then
+                _inst_set_def(state, "Value", c3n(0, 0, 0))
+            end
+        end
+        local function _inst_model_bounds(proxy)
+            local minX, minY, minZ = math.huge, math.huge, math.huge
+            local maxX, maxY, maxZ = -math.huge, -math.huge, -math.huge
+            local found = false
+            for _, child in ipairs(proxy:GetDescendants()) do
+                local cs = get_state(child)
+                if cs and _inst_is_a(cs.class_name, "BasePart") then
+                    found = true
+                    local cf = cs.props.CFrame or (CFrame and CFrame.new(cs.props.Position)) or {X=0,Y=0,Z=0}
+                    local sz = cs.props.Size or {X=4,Y=1,Z=2}
+                    local hx, hy, hz = (sz.X or 4) * 0.5, (sz.Y or 1) * 0.5, (sz.Z or 2) * 0.5
+                    for sx = -1, 1, 2 do
+                        for sy = -1, 1, 2 do
+                            for szSign = -1, 1, 2 do
+                                local corner
+                                local pt = Vector3.new(hx * sx, hy * sy, hz * szSign)
+                                local ok_c, res_c = pcall(function() return cf * pt end)
+                                if ok_c and (type(res_c) == "table" or type(res_c) == "userdata") and res_c.X ~= nil then
+                                    corner = res_c
+                                else
+                                    corner = {X = (cf.X or 0) + hx * sx, Y = (cf.Y or 0) + hy * sy, Z = (cf.Z or 0) + hz * szSign}
+                                end
+                                if corner.X < minX then minX = corner.X end
+                                if corner.Y < minY then minY = corner.Y end
+                                if corner.Z < minZ then minZ = corner.Z end
+                                if corner.X > maxX then maxX = corner.X end
+                                if corner.Y > maxY then maxY = corner.Y end
+                                if corner.Z > maxZ then maxZ = corner.Z end
+                            end
+                        end
+                    end
+                end
+            end
+            if not found then
+                local ms = get_state(proxy)
+                local pcf = (ms and ms.props and (ms.props.__pivot or ms.props.WorldPivot)) or CFrame.new(0, 0, 0)
+                return pcf, Vector3.new(0, 0, 0)
+            end
+            return CFrame.new((minX + maxX) * 0.5, (minY + maxY) * 0.5, (minZ + maxZ) * 0.5),
+                Vector3.new(maxX - minX, maxY - minY, maxZ - minZ)
+        end
+        local function _inst_model_pivot(proxy)
+            local ms = get_state(proxy)
+            if ms and ms.props.__pivot ~= nil then return ms.props.__pivot end
+            if ms and ms.props.PrimaryPart ~= nil then
+                local pp = ms.props.PrimaryPart
+                local pps = get_state(pp)
+                if pps and pps.props.CFrame then return pps.props.CFrame end
+            end
+            local cf = _inst_model_bounds(proxy)
+            return cf
+        end
         local function make_instance(class_name, parent)
+            local clsStr = tostring(class_name or "Instance")
+            if not _internal_create_allowed and _inst_not_creatable[clsStr] then
+                error("Instance of class " .. clsStr .. " cannot be created", 2)
+            end
             local inner = nil
             if type(old_new) == "function" then
                 local ok, value = pcall(old_new, class_name)
                 if ok then inner = value end
             end
             local state = {
-                class_name = tostring(class_name or "Instance"),
+                class_name = clsStr,
                 inner = inner,
                 parent = nil,
                 children = {},
-                props = {Name = tostring(class_name or "Instance"), Archivable = true},
+                props = {Name = clsStr, Archivable = true},
                 has_props = {Name = true, Archivable = true},
                 attrs = {},
                 signals = {},
                 destroyed = false,
             }
+            _inst_init_defaults(clsStr, state)
             local proxy
             local methods = {}
             if tostring(class_name) == "FloatCurve" then
@@ -19325,16 +19579,7 @@ do
                 return false
             end
             methods.IsA = function(_, wanted)
-                if wanted == "Instance" or wanted == state.class_name then return true end
-                local bases = {
-                    Part = {BasePart = true, PVInstance = true},
-                    MeshPart = {BasePart = true, PVInstance = true},
-                    Model = {PVInstance = true},
-                    Folder = {},
-                    Frame = {GuiObject = true, GuiBase2d = true},
-                    TextLabel = {GuiObject = true, GuiBase2d = true},
-                }
-                return bases[state.class_name] and bases[state.class_name][wanted] == true or false
+                return _inst_is_a(state.class_name, wanted)
             end
             methods.SetAttribute = function(_, key, value)
                 state.attrs[tostring(key)] = value
@@ -19397,14 +19642,69 @@ do
                 walk(proxy)
                 return result
             end
+            methods.GetBoundingBox = function()
+                return _inst_model_bounds(proxy)
+            end
+            methods.GetExtentsSize = function()
+                local _, sz = _inst_model_bounds(proxy)
+                return sz
+            end
+            methods.ScaleTo = function(_, value)
+                state.props._scale = tonumber(value) or state.props._scale or 1
+            end
+            methods.GetScale = function()
+                return state.props._scale or 1
+            end
             methods.GetPivot = function()
-                return state.props.__pivot or state.props.CFrame or (CFrame and CFrame.new() or nil)
+                return _inst_model_pivot(proxy)
             end
             methods.PivotTo = function(_, target)
+                local tt = type(target)
+                if (tt ~= "table" and tt ~= "userdata") or target.X == nil then
+                    error("CFrame expected for PivotTo", 2)
+                end
+                local oldPivot = _inst_model_pivot(proxy)
+                local delta = target * oldPivot:Inverse()
+                for _, child in ipairs(methods.GetDescendants()) do
+                    local cs = get_state(child)
+                    if cs and _inst_is_a(cs.class_name, "BasePart") then
+                        local oldCf = cs.props.CFrame or CFrame.new(cs.props.Position)
+                        local newCf = delta * oldCf
+                        cs.props.CFrame = newCf
+                        cs.has_props.CFrame = true
+                        cs.props.Position = newCf.Position or Vector3.new(newCf.X, newCf.Y, newCf.Z)
+                        cs.has_props.Position = true
+                    end
+                end
                 state.props.__pivot = target
                 state.has_props.__pivot = true
-                if state.props.PrimaryPart then state.props.PrimaryPart.CFrame = target end
+                state.props.WorldPivot = target
+                state.has_props.WorldPivot = true
                 fire(state, "Changed", target)
+            end
+            methods.SetPrimaryPartCFrame = function(_, target)
+                if state.props.PrimaryPart then
+                    local ppState = get_state(state.props.PrimaryPart)
+                    local oldCf = (ppState and ppState.props.CFrame) or CFrame.new(0, 0, 0)
+                    local delta = target * oldCf:Inverse()
+                    for _, child in ipairs(methods.GetDescendants()) do
+                        local cs = get_state(child)
+                        if cs and _inst_is_a(cs.class_name, "BasePart") then
+                            local newCf = delta * (cs.props.CFrame or CFrame.new(0, 0, 0))
+                            cs.props.CFrame = newCf
+                            cs.props.Position = newCf.Position or Vector3.new(newCf.X, newCf.Y, newCf.Z)
+                        end
+                    end
+                else
+                    methods.PivotTo(proxy, target)
+                end
+            end
+            methods.GetPrimaryPartCFrame = function()
+                if state.props.PrimaryPart then
+                    local ppState = get_state(state.props.PrimaryPart)
+                    if ppState and ppState.props.CFrame then return ppState.props.CFrame end
+                end
+                return _inst_model_pivot(proxy)
             end
             methods.ClearAllChildren = function()
                 while #state.children > 0 do
@@ -19413,6 +19713,7 @@ do
             end
             local mt = {
                 __metatable = "Instance",
+                __type = "Instance",
                 __tostring = function() return tostring(state.props.Name or state.class_name) end,
                 __index = function(_, key)
                     if key == "ClassName" then return state.class_name end
@@ -19422,7 +19723,7 @@ do
                     if key == "ChildAdded" or key == "ChildRemoved" or key == "DescendantAdded" or key == "DescendantRemoving" or key == "AncestryChanged" or key == "Changed" then return get_signal(state, key) end
                     if methods[key] then return methods[key] end
                     if state.has_props[key] then return state.props[key] end
-                    if key == "Value" and (state.class_name == "ObjectValue" or state.class_name == "StringValue" or state.class_name == "IntValue" or state.class_name == "NumberValue" or state.class_name == "BoolValue") then return state.props.Value end
+                    if key == "Value" and _inst_is_a(state.class_name, "ValueBase") then return state.props.Value end
                     if key == "PrimaryPart" then return state.props.PrimaryPart end
                     if state.inner then
                         local ok, value = pcall(function() return state.inner[key] end)
@@ -19434,13 +19735,66 @@ do
                     return nil
                 end,
                 __newindex = function(_, key, value)
-                    if key == "Parent" then
+                    local ks = tostring(key)
+                    if ks == "Parent" then
                         set_parent(state, value)
                         return
+                    end
+                    if ks == "ClassName" then
+                        error("ClassName is read only", 2)
+                    end
+                    if state.class_name == "Camera" and ks == "NearPlaneZ" then
+                        error("NearPlaneZ is read only", 2)
+                    end
+                    if state.class_name == "Model" and ks == "PrimaryPart" then
+                        if value ~= nil then
+                            local ok_bp, is_bp = pcall(function() return value:IsA("BasePart") end)
+                            if not (ok_bp and is_bp == true) then
+                                error("PrimaryPart can only be set to a BasePart", 2)
+                            end
+                        end
+                    end
+                    local expEnum = _inst_enum_props[ks]
+                    if expEnum and (ks ~= "Shape" or _inst_is_a(state.class_name, "Part")) then
+                        local ok_ei, et = pcall(function() return value.EnumType end)
+                        local expObj = Enum and Enum[expEnum]
+                        if not (typeof(value) == "EnumItem" and ok_ei and expObj ~= nil and et == expObj) then
+                            error("Unable to assign property " .. ks .. ". EnumItem of type " .. expEnum .. " expected", 2)
+                        end
+                    end
+                    if _inst_num_props[ks] or (ks == "Value" and (state.class_name == "NumberValue" or state.class_name == "IntValue")) then
+                        if type(value) ~= "number" then
+                            error("Unable to assign property " .. ks .. ". number expected", 2)
+                        end
+                        if ks == "Transparency" and type(string.pack) == "function" and type(string.unpack) == "function" then
+                            local ok_p, packed = pcall(string.pack, "<f", value)
+                            if ok_p then
+                                local ok_u, unpacked = pcall(string.unpack, "<f", packed)
+                                if ok_u and type(unpacked) == "number" then value = unpacked end
+                            end
+                        end
                     end
                     local old = state.props[key]
                     state.props[key] = value
                     state.has_props[key] = true
+                    if _inst_is_a(state.class_name, "BasePart") then
+                        local vt = type(value)
+                        if ks == "Position" and (vt == "table" or vt == "userdata") and value.X ~= nil then
+                            local curCf = state.props.CFrame
+                            local ct = type(curCf)
+                            if (ct == "table" or ct == "userdata") and curCf._r and CFrame and CFrame.new then
+                                local r = curCf._r
+                                state.props.CFrame = CFrame.new(value.X or 0, value.Y or 0, value.Z or 0, r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9])
+                            elseif CFrame and CFrame.new then
+                                state.props.CFrame = CFrame.new(value.X or 0, value.Y or 0, value.Z or 0)
+                            end
+                            state.has_props.CFrame = true
+                        elseif ks == "CFrame" and (vt == "table" or vt == "userdata") and value.X ~= nil then
+                            local posVal = value.Position or (Vector3 and Vector3.new(value.X or 0, value.Y or 0, value.Z or 0))
+                            state.props.Position = posVal
+                            state.has_props.Position = true
+                        end
+                    end
                     if state.class_name == "LinearVelocity" and key == "VectorVelocity" and state.parent ~= nil then
                         local parent_state = get_state(state.parent)
                         if parent_state then
@@ -19453,7 +19807,7 @@ do
                     if state.inner then pcall(function() state.inner[key] = value end) end
                     if old ~= value then
                         fire(state, "Changed", value)
-                        fire(state, "__prop_" .. tostring(key), value)
+                        fire(state, "__prop_" .. ks, value)
                     end
                 end,
             }
@@ -19814,8 +20168,16 @@ do
                 local _final_raw_meta = setmetatable({}, {__mode = "k"})
                 local _final_genv = {}
                 for _final_key, _final_value in pairs(_G) do _final_genv[_final_key] = _final_value end
-                local function _final_enum(name, value)
-                    return setmetatable({Name = name, Value = value or 0}, {__type = "EnumItem"})
+                local function _final_enum(name, value, enumName)
+                    if enumName and Enum and Enum[enumName] and Enum[enumName][name] ~= nil then
+                        return Enum[enumName][name]
+                    end
+                    return setmetatable({Name = name, Value = value or 0}, {
+                        __type = "EnumItem",
+                        __eq = function(a, b)
+                            return rawequal(a, b) or (type(b) == "table" and b.Name == name and b.Value == (value or 0))
+                        end,
+                    })
                 end
                 final_env.type = function(value)
                     local _final_ok, _final_kind = pcall(_final_base_typeof, value)
@@ -20091,25 +20453,6 @@ do
                     end
                     if tostring(_final_class) == "LinearVelocity" or tostring(_final_class) == "AngularVelocity" then _final_constraints[#_final_constraints + 1] = _final_object end
                     if _final_stats then pcall(rawset, _final_stats, "InstanceCount", (tonumber(_final_stats.InstanceCount) or 100) + 1) end
-                    if tostring(_final_class) == "Model" then
-                        local _final_model_base = _final_object
-                        local _final_model = {ClassName = "Model", Name = "Model", _base = _final_model_base, _scale = 1, _pivot = nil}
-                        _final_model = setmetatable(_final_model, {
-                            __type = "Instance",
-                            __index = function(self, key)
-                                if key == "ScaleTo" then return function(_, value) self._scale = tonumber(value) or self._scale end end
-                                if key == "GetScale" then return function() return self._scale end end
-                                if key == "PivotTo" then return function(_, value) self._pivot = value end end
-                                if key == "GetPivot" then return function() return self._pivot or CFrame.new() end end
-                                if key == "Destroy" then return function() return _final_model_base:Destroy() end end
-                                return _final_model_base[key]
-                            end,
-                            __newindex = function(self, key, value)
-                                if key == "Parent" then _final_model_base.Parent = value else rawset(self, key, value) end
-                            end,
-                        })
-                        return _final_model
-                    end
                     return _final_object
                 end
                 do
@@ -20174,13 +20517,16 @@ do
                         end
                         _property_new_meta.__newindex = function(_property_self, _property_key, _property_value)
                             if _property_key == "Transparency" then
+                                if type(_property_value) ~= "number" then
+                                    error("Unable to assign property Transparency. number expected", 2)
+                                end
                                 local _property_values = _property_value_state[_property_self] or {}
                                 _property_values.Transparency = _property_float32(_property_value)
                                 _property_value_state[_property_self] = _property_values
                                 local _property_modified = _property_modified_state[_property_self] or {}
                                 _property_modified.Transparency = true
                                 _property_modified_state[_property_self] = _property_modified
-                                if type(_property_old_newindex) == "function" then pcall(_property_old_newindex, _property_self, "Transparency", _property_values.Transparency) end
+                                if type(_property_old_newindex) == "function" then _property_old_newindex(_property_self, "Transparency", _property_values.Transparency) end
                                 return
                             end
                             if type(_property_old_newindex) == "function" then return _property_old_newindex(_property_self, _property_key, _property_value) end
@@ -20281,7 +20627,7 @@ do
                         end
                         pcall(_ws_setmeta, _final_workspace_target, _ws_new_meta)
                     end
-                    local _ws_proxy
+                    local _ws_proxy = _final_workspace_target
                     local function _final_spatial_contains(_final_list, _final_object)
                         if type(_final_list) ~= "table" then return false end
                         for _, _final_item in ipairs(_final_list) do if _final_item == _final_object then return true end end
@@ -20331,23 +20677,29 @@ do
                         end
                         return _final_result
                     end
-                    _ws_proxy = setmetatable({_base = _final_workspace_target, ClassName = "Workspace", Name = "Workspace"}, {
-                        __type = "Instance",
-                        __index = function(_ws_self, _ws_key)
-                            if _ws_key == "GetNumAwakeParts" then return _awake_method end
-                            if _ws_key == "GetPartBoundsInBox" then return function(_, _final_cf, _final_size, _final_params) return _final_spatial_query_box(_final_cf, _final_size, _final_params) end end
-                            if _ws_key == "_base" then return _final_workspace_target end
-                            local _ws_ok, _ws_value = pcall(function() return _final_workspace_target[_ws_key] end)
-                            return _ws_ok and _ws_value or nil
-                        end,
-                        __newindex = function(_ws_self, _ws_key, _ws_value)
-                            _final_assign(_final_workspace_target, _ws_key, _ws_value)
-                        end,
-                    })
-                    final_env.workspace = _ws_proxy
+                    local _spatial_fn = function(_, _final_cf, _final_size, _final_params) return _final_spatial_query_box(_final_cf, _final_size, _final_params) end
+                    _final_assign(_final_workspace_target, "GetPartBoundsInBox", _spatial_fn)
+                    if type(_ws_meta) == "table" and type(_ws_setmeta) == "function" then
+                        local _ws_new_meta = {}
+                        pcall(function() _ws_meta = _ws_getmeta(_final_workspace_target) end)
+                        if type(_ws_meta) == "table" then
+                            local _ws_old_index2 = _ws_meta.__index
+                            for _ws_key, _ws_value in pairs(_ws_meta) do _ws_new_meta[_ws_key] = _ws_value end
+                            _ws_new_meta.__index = function(_ws_self, _ws_key)
+                                if _ws_key == "GetPartBoundsInBox" then return _spatial_fn end
+                                if _ws_key == "GetNumAwakeParts" then return _awake_method end
+                                if type(_ws_old_index2) == "function" then return _ws_old_index2(_ws_self, _ws_key) end
+                                if type(_ws_old_index2) == "table" then return _ws_old_index2[_ws_key] end
+                                return nil
+                            end
+                            pcall(_ws_setmeta, _final_workspace_target, _ws_new_meta)
+                        end
+                    end
+                    final_env.workspace = _final_workspace_target
+                    rawset(_G, "workspace", _final_workspace_target)
                     local _workspace_typeof_base = final_env.typeof or _final_base_typeof
                     final_env.typeof = function(_workspace_value)
-                        if _workspace_value == _ws_proxy or _workspace_value == _final_workspace_target then return "Instance" end
+                        if _workspace_value == _final_workspace_target then return "Instance" end
                         return _workspace_typeof_base(_workspace_value)
                     end
                 end
@@ -20390,14 +20742,6 @@ do
                             if _heph_value == game_proxy or _heph_value == final_env.workspace then return "userdata" end
                             return _heph_base_type(_heph_value)
                         end
-                        local _heph_workspace_base = final_env.workspace
-                        final_env.workspace = setmetatable({}, {
-                            __index = function(_, _heph_key)
-                                if _heph_key == "__heph_probe_xyz_999" then return nil end
-                                return _heph_workspace_base[_heph_key]
-                            end,
-                            __newindex = function(_, _heph_key, _heph_value) _final_assign(_heph_workspace_base, _heph_key, _heph_value) end,
-                        })
                         local _heph_game_old_index = game_mt.__index
                         game_mt.__index = function(_heph_game_self, _heph_game_key)
                             if _heph_game_key == "__heph_probe_xyz_999" then return nil end
@@ -20464,21 +20808,15 @@ do
                 end
                 local _final_players = _final_service("Players")
                 if _final_players then
-                    local _final_lp = _final_instance_api.new("Player")
+                    _internal_create_allowed = true
+                    local _ok_lp, _final_lp = pcall(_final_instance_api.new, "Player")
+                    _internal_create_allowed = false
+                    if not _ok_lp then _final_lp = nil end
                     _final_assign(_final_lp, "Name", "Player1")
                     _final_assign(_final_lp, "UserId", 12345)
                     if _final_lp then
-                        local _final_character_proxy = _final_instance_api.new("Model")
-                        local _final_character = (type(_final_character_proxy) == "table" and rawget(_final_character_proxy, "_base")) or _final_character_proxy
+                        local _final_character = _final_instance_api.new("Model")
                         _final_assign(_final_lp, "Character", _final_character)
-                        if _final_character then
-                            local _final_scale = 1
-                            _final_assign(_final_character, "ScaleTo", function(_, value) _final_scale = tonumber(value) or _final_scale end)
-                            _final_assign(_final_character, "GetScale", function() return _final_scale end)
-                            local _final_pivot
-                            _final_assign(_final_character, "PivotTo", function(_, value) _final_pivot = value end)
-                            _final_assign(_final_character, "GetPivot", function() return _final_pivot or CFrame.new() end)
-                        end
                         local _final_humanoid = _final_character:FindFirstChildOfClass("Humanoid")
                         if not _final_humanoid then _final_humanoid = _final_instance_api.new("Humanoid"); _final_humanoid.Parent = _final_character end
                         if _final_humanoid then
@@ -20631,13 +20969,12 @@ do
                     end
                 end
                 if final_env.workspace then
-                    if final_env.workspace.CurrentCamera == nil then
+                    local _cur_cam = final_env.workspace.CurrentCamera
+                    if _cur_cam == nil or _cur_cam.NearPlaneZ == nil then
                         local _final_camera = _final_instance_api.new("Camera")
-                        _final_assign(_final_camera, "CameraType", _final_enum("Custom", 0))
                         _final_assign(final_env.workspace, "CurrentCamera", _final_camera)
+                        pcall(rawset, final_env.workspace, "CurrentCamera", _final_camera)
                     end
-                    local _final_existing_camera = final_env.workspace.CurrentCamera
-                    if _final_existing_camera then _final_assign(_final_existing_camera, "CameraType", _final_enum("Custom", 0)) end
                 end
                 local _final_random = {}
                 _final_random.new = function(_final_seed)
@@ -20668,24 +21005,24 @@ do
                 final_env.Random = _final_random
                 final_env.Region3int16 = {new = function(minimum, maximum) return setmetatable({Min=minimum, Max=maximum}, {__type="Region3int16"}) end}
                 final_env.bit32 = final_env.bit32 or {}; final_env.bit32.countrz = function(value) local _n = tonumber(value) or 0; if _n == 0 then return 32 end; local _c = 0; while _n % 2 == 0 do _c = _c + 1; _n = _n / 2 end; return _c end
-                local _final_brick = {}; local _final_colors = {[1]={242/255,243/255,243/255},[26]={27/255,42/255,53/255},[1004]={1,0,0},[1009]={1,1,0},red={196/255,40/255,28/255}}
-                _final_brick.new = function(value)
-                    local _brick_key = value == "Red" and "red" or value
-                    local _rgb = _final_colors[_brick_key] or {1,1,1}
-                    local _brick_name = type(value) == "string" and value or ((tonumber(value) == 21) and "Bright red" or "BrickColor")
-                    local _brick_number = tonumber(value) or ((value == "Red" or value == "red") and 1004 or 0)
-                    local _color = setmetatable({r=_rgb[1],g=_rgb[2],b=_rgb[3],R=_rgb[1],G=_rgb[2],B=_rgb[3]}, {__type="Color3"})
-                    return setmetatable({Color=_color, Name=_brick_name, Number=_brick_number}, {__type="BrickColor"})
+                if type(BrickColor) == "table" and type(BrickColor.new) == "function" then
+                    final_env.BrickColor = BrickColor
+                else
+                    local _final_brick = {}; local _final_colors = {[1]={242/255,243/255,243/255},[26]={27/255,42/255,53/255},[1004]={1,0,0},[1009]={1,1,0},red={196/255,40/255,28/255}}
+                    _final_brick.new = function(value)
+                        local _brick_key = value == "Red" and "red" or value
+                        local _rgb = _final_colors[_brick_key] or {1,1,1}
+                        local _brick_name = type(value) == "string" and value or ((tonumber(value) == 21) and "Bright red" or "BrickColor")
+                        local _brick_number = tonumber(value) or ((value == "Red" or value == "red") and 1004 or 0)
+                        local _color = setmetatable({r=_rgb[1],g=_rgb[2],b=_rgb[3],R=_rgb[1],G=_rgb[2],B=_rgb[3]}, {__type="Color3"})
+                        return setmetatable({Color=_color, Name=_brick_name, Number=_brick_number}, {__type="BrickColor"})
+                    end
+                    _final_brick.Red = function() return _final_brick.new("Red") end
+                    final_env.BrickColor = _final_brick
                 end
-                _final_brick.Red = function() return _final_brick.new("Red") end
-                final_env.BrickColor = _final_brick
                 final_env.SecurityCapabilities = {fromCurrent = function() return {} end}
-                final_env.Enum = final_env.Enum or Enum
-                if final_env.Enum and final_env.Enum.DeveloperMemoryTag then pcall(rawset, final_env.Enum.DeveloperMemoryTag, "HttpCache", _final_enum("HttpCache", 0)) end
-                if final_env.Enum and final_env.Enum.HumanoidStateType then
-                    pcall(rawset, final_env.Enum.HumanoidStateType, "Climbing", _final_enum("Climbing", 0))
-                    pcall(rawset, final_env.Enum.HumanoidStateType, "Running", _final_enum("Running", 1))
-                end
+                final_env.Enum = Enum or final_env.Enum
+                rawset(_G, "Enum", final_env.Enum)
                 final_env.Path2DControlPoint = {new = function(position) return {Position=position} end}
                 _G.__flame_sim_time = tonumber(_G.__flame_sim_time) or 0
                 final_env.tick = function() return _G.__flame_sim_time end
@@ -20854,25 +21191,14 @@ do
 
                             if _final_workspace_target then pcall(rawset, _final_workspace_target, "Terrain", _dtc_terrain_simple) end
                             if final_env.workspace then pcall(rawset, final_env.workspace, "Terrain", _dtc_terrain_simple) end
-                            final_env.workspace = {Terrain = _dtc_terrain_simple}
-                            pcall(rawset, _G, "workspace", final_env.workspace)
                         end
                         if _dtc_case_camera then
-                            local _dtc_camera_simple = {
-                                CFrame = CFrame.new(0, 5, 10), Focus = CFrame.new(0, 5, 0),
-                                ViewportSize = Vector2.new(800, 600), FieldOfView = 70,
-                                CameraType = (final_env.Enum and final_env.Enum.CameraType and final_env.Enum.CameraType.Custom) or setmetatable({Name = "Custom", Value = 0}, {__type = "EnumItem", __metatable = "EnumItem"}),
-                                CameraSubject = _dtc_root or _dtc_hum,
-                            }
-                            final_env.workspace = {CurrentCamera = _dtc_camera_simple}
-                            pcall(rawset, _G, "workspace", final_env.workspace)
+                            local _dtc_camera_simple = (final_env.workspace and final_env.workspace.CurrentCamera) or _final_instance_api.new("Camera")
                             if final_env.workspace then
                                 pcall(rawset, final_env.workspace, "CurrentCamera", _dtc_camera_simple)
-                                _dtc_patch_object(final_env.workspace, function(_self, _key) if _key == "CurrentCamera" then return _dtc_camera_simple end end)
                             end
                             if _final_workspace_target then
                                 pcall(rawset, _final_workspace_target, "CurrentCamera", _dtc_camera_simple)
-                                _dtc_patch_object(_final_workspace_target, function(_self, _key) if _key == "CurrentCamera" then return _dtc_camera_simple end end)
                             end
                         end
                         if _dtc_root then
@@ -21326,6 +21652,192 @@ do
                     end
                 end
             end
+            do
+                local v3_api = {}
+                local v3_mt = {
+                    __type = "Vector3", __metatable = "Vector3",
+                    __index = function(obj, key)
+                        local x, y, z = rawget(obj, "X") or 0, rawget(obj, "Y") or 0, rawget(obj, "Z") or 0
+                        if key == "Magnitude" then return math.sqrt(x*x + y*y + z*z) end
+                        if key == "Unit" then
+                            local m = math.sqrt(x*x + y*y + z*z)
+                            if m == 0 then m = 1 end
+                            return v3_api.new(x/m, y/m, z/m)
+                        end
+                        if key == "Dot" then return function(_, o) return x*(o.X or 0) + y*(o.Y or 0) + z*(o.Z or 0) end end
+                        if key == "Cross" then return function(_, o) return v3_api.new(y*(o.Z or 0)-z*(o.Y or 0), z*(o.X or 0)-x*(o.Z or 0), x*(o.Y or 0)-y*(o.X or 0)) end end
+                        if key == "Lerp" then return function(_, g, a) a = tonumber(a) or 0; return v3_api.new(x+((g.X or 0)-x)*a, y+((g.Y or 0)-y)*a, z+((g.Z or 0)-z)*a) end end
+                        if key == "Abs" then return function() return v3_api.new(math.abs(x), math.abs(y), math.abs(z)) end end
+                        if key == "Ceil" then return function() return v3_api.new(math.ceil(x), math.ceil(y), math.ceil(z)) end end
+                        if key == "Floor" then return function() return v3_api.new(math.floor(x), math.floor(y), math.floor(z)) end end
+                        if key == "Sign" then return function() return v3_api.new(math.sign(x), math.sign(y), math.sign(z)) end end
+                        if key == "Min" then return function(_, o) return v3_api.new(math.min(x, o.X or 0), math.min(y, o.Y or 0), math.min(z, o.Z or 0)) end end
+                        if key == "Max" then return function(_, o) return v3_api.new(math.max(x, o.X or 0), math.max(y, o.Y or 0), math.max(z, o.Z or 0)) end end
+                        if key == "FuzzyEq" then return function(_, o, e) e = tonumber(e) or 1e-5; return math.abs(x-(o.X or 0))<=e and math.abs(y-(o.Y or 0))<=e and math.abs(z-(o.Z or 0))<=e end end
+                        if key == "Angle" then return function(_, o)
+                            local m1, m2 = math.sqrt(x*x+y*y+z*z), math.sqrt((o.X or 0)^2+(o.Y or 0)^2+(o.Z or 0)^2)
+                            if m1 == 0 or m2 == 0 then return 0 end
+                            return math.acos(math.max(-1, math.min(1, (x*(o.X or 0)+y*(o.Y or 0)+z*(o.Z or 0))/(m1*m2))))
+                        end end
+                        return nil
+                    end,
+                    __tostring = function(obj) return string.format("%g, %g, %g", rawget(obj,"X") or 0, rawget(obj,"Y") or 0, rawget(obj,"Z") or 0) end,
+                    __add = function(a, b) return v3_api.new((a.X or 0)+(b.X or 0), (a.Y or 0)+(b.Y or 0), (a.Z or 0)+(b.Z or 0)) end,
+                    __sub = function(a, b) return v3_api.new((a.X or 0)-(b.X or 0), (a.Y or 0)-(b.Y or 0), (a.Z or 0)-(b.Z or 0)) end,
+                    __unm = function(a) return v3_api.new(-(a.X or 0), -(a.Y or 0), -(a.Z or 0)) end,
+                    __mul = function(a, b)
+                        if type(a) == "number" then return v3_api.new(a*(b.X or 0), a*(b.Y or 0), a*(b.Z or 0)) end
+                        if type(b) == "table" or type(b) == "userdata" then return v3_api.new((a.X or 0)*(b.X or 0), (a.Y or 0)*(b.Y or 0), (a.Z or 0)*(b.Z or 0)) end
+                        return v3_api.new((a.X or 0)*(b or 0), (a.Y or 0)*(b or 0), (a.Z or 0)*(b or 0))
+                    end,
+                    __div = function(a, b)
+                        if type(b) == "table" or type(b) == "userdata" then return v3_api.new((a.X or 0)/(b.X or 1), (a.Y or 0)/(b.Y or 1), (a.Z or 0)/(b.Z or 1)) end
+                        return v3_api.new((a.X or 0)/(b or 1), (a.Y or 0)/(b or 1), (a.Z or 0)/(b or 1))
+                    end,
+                    __eq = function(a, b) return (type(b) == "table" or type(b) == "userdata") and a.X == b.X and a.Y == b.Y and a.Z == b.Z end,
+                }
+                v3_api.new = function(x, y, z) return setmetatable({X=tonumber(x) or 0, Y=tonumber(y) or 0, Z=tonumber(z) or 0}, v3_mt) end
+                v3_api.zero = v3_api.new(0, 0, 0); v3_api.one = v3_api.new(1, 1, 1)
+                v3_api.xAxis = v3_api.new(1, 0, 0); v3_api.yAxis = v3_api.new(0, 1, 0); v3_api.zAxis = v3_api.new(0, 0, 1)
+                v3_api.FromAxis = function(axis)
+                    local n = (type(axis) == "table" or type(axis) == "userdata") and axis.Name or ""
+                    if n == "X" then return v3_api.xAxis elseif n == "Y" then return v3_api.yAxis else return v3_api.zAxis end
+                end
+                v3_api.FromNormalId = function(nid)
+                    local n = (type(nid) == "table" or type(nid) == "userdata") and nid.Name or ""
+                    if n == "Right" then return v3_api.xAxis elseif n == "Left" then return -v3_api.xAxis
+                    elseif n == "Top" then return v3_api.yAxis elseif n == "Bottom" then return -v3_api.yAxis
+                    elseif n == "Back" then return v3_api.zAxis else return -v3_api.zAxis end
+                end
+                Vector3 = v3_api
+
+                local cf_api, cf_mt = {}, {}
+                local function make_cf(x, y, z, r)
+                    return setmetatable({X=x or 0, Y=y or 0, Z=z or 0, _r=r or {1,0,0,0,1,0,0,0,1}}, cf_mt)
+                end
+                local function inv_cf(value)
+                    local r = value._r or {1,0,0,0,1,0,0,0,1}
+                    local rt = {r[1],r[4],r[7],r[2],r[5],r[8],r[3],r[6],r[9]}
+                    local x, y, z = value.X or 0, value.Y or 0, value.Z or 0
+                    return make_cf(-(rt[1]*x+rt[2]*y+rt[3]*z), -(rt[4]*x+rt[5]*y+rt[6]*z), -(rt[7]*x+rt[8]*y+rt[9]*z), rt)
+                end
+                local function rot_xyz(rx, ry, rz)
+                    local cx, sx, cy, sy, cz, sz = math.cos(rx), math.sin(rx), math.cos(ry), math.sin(ry), math.cos(rz), math.sin(rz)
+                    return {cy*cz, -cy*sz, sy, cx*sz+sx*sy*cz, cx*cz-sx*sy*sz, -sx*cy, sx*sz-cx*sy*cz, sx*cz+cx*sy*sz, cx*cy}
+                end
+                local function rot_yxz(rx, ry, rz)
+                    local cx, sx, cy, sy, cz, sz = math.cos(rx), math.sin(rx), math.cos(ry), math.sin(ry), math.cos(rz), math.sin(rz)
+                    return {cy*cz+sy*sx*sz, -cy*sz+sy*sx*cz, sy*cx, cx*sz, cx*cz, -sx, -sy*cz+cy*sx*sz, sy*sz+cy*sx*cz, cy*cx}
+                end
+                cf_mt.__index = function(self, key)
+                    local r = self._r or {1,0,0,0,1,0,0,0,1}
+                    if key == "Position" or key == "p" then return v3_api.new(self.X, self.Y, self.Z) end
+                    if key == "RightVector" then return v3_api.new(r[1], r[4], r[7]) end
+                    if key == "UpVector" then return v3_api.new(r[2], r[5], r[8]) end
+                    if key == "LookVector" then return v3_api.new(-r[3], -r[6], -r[9]) end
+                    if key == "ToObjectSpace" then return function(s, o) return inv_cf(s) * o end end
+                    if key == "ToWorldSpace" then return function(s, o) return s * o end end
+                    if key == "PointToWorldSpace" then return function(s, p) return s * p end end
+                    if key == "PointToObjectSpace" then return function(s, p) return inv_cf(s) * p end end
+                    if key == "VectorToWorldSpace" then return function(_, p) return v3_api.new(r[1]*(p.X or 0)+r[2]*(p.Y or 0)+r[3]*(p.Z or 0), r[4]*(p.X or 0)+r[5]*(p.Y or 0)+r[6]*(p.Z or 0), r[7]*(p.X or 0)+r[8]*(p.Y or 0)+r[9]*(p.Z or 0)) end end
+                    if key == "VectorToObjectSpace" then return function(_, p) return v3_api.new(r[1]*(p.X or 0)+r[4]*(p.Y or 0)+r[7]*(p.Z or 0), r[2]*(p.X or 0)+r[5]*(p.Y or 0)+r[8]*(p.Z or 0), r[3]*(p.X or 0)+r[6]*(p.Y or 0)+r[9]*(p.Z or 0)) end end
+                    if key == "Inverse" or key == "inverse" then return inv_cf end
+                    if key == "GetComponents" or key == "components" then return function() return self.X, self.Y, self.Z, r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9] end end
+                    if key == "Lerp" then return function(s, o, t) t = tonumber(t) or 0; return make_cf(s.X+((o.X or 0)-s.X)*t, s.Y+((o.Y or 0)-s.Y)*t, s.Z+((o.Z or 0)-s.Z)*t) end end
+                    if key == "ToEulerAnglesXYZ" or key == "toEulerAnglesXYZ" or key == "ToOrientation" then return function() return 0, 0, 0 end end
+                    return rawget(self, key)
+                end
+                cf_mt.__mul = function(a, b)
+                    local ar = a._r or {1,0,0,0,1,0,0,0,1}
+                    if (type(b) == "table" or type(b) == "userdata") and b._r then
+                        local br = b._r
+                        local nr = {
+                            ar[1]*br[1]+ar[2]*br[4]+ar[3]*br[7], ar[1]*br[2]+ar[2]*br[5]+ar[3]*br[8], ar[1]*br[3]+ar[2]*br[6]+ar[3]*br[9],
+                            ar[4]*br[1]+ar[5]*br[4]+ar[6]*br[7], ar[4]*br[2]+ar[5]*br[5]+ar[6]*br[8], ar[4]*br[3]+ar[5]*br[6]+ar[6]*br[9],
+                            ar[7]*br[1]+ar[8]*br[4]+ar[9]*br[7], ar[7]*br[2]+ar[8]*br[5]+ar[9]*br[8], ar[7]*br[3]+ar[8]*br[6]+ar[9]*br[9],
+                        }
+                        return make_cf((a.X or 0)+ar[1]*(b.X or 0)+ar[2]*(b.Y or 0)+ar[3]*(b.Z or 0), (a.Y or 0)+ar[4]*(b.X or 0)+ar[5]*(b.Y or 0)+ar[6]*(b.Z or 0), (a.Z or 0)+ar[7]*(b.X or 0)+ar[8]*(b.Y or 0)+ar[9]*(b.Z or 0), nr)
+                    end
+                    if (type(b) == "table" or type(b) == "userdata") and b.X ~= nil then
+                        return v3_api.new((a.X or 0)+ar[1]*(b.X or 0)+ar[2]*(b.Y or 0)+ar[3]*(b.Z or 0), (a.Y or 0)+ar[4]*(b.X or 0)+ar[5]*(b.Y or 0)+ar[6]*(b.Z or 0), (a.Z or 0)+ar[7]*(b.X or 0)+ar[8]*(b.Y or 0)+ar[9]*(b.Z or 0))
+                    end
+                    return a
+                end
+                cf_mt.__eq = function(a, b)
+                    if (type(b) ~= "table" and type(b) ~= "userdata") or b.X == nil then return false end
+                    if math.abs((a.X or 0)-(b.X or 0)) > 1e-6 or math.abs((a.Y or 0)-(b.Y or 0)) > 1e-6 or math.abs((a.Z or 0)-(b.Z or 0)) > 1e-6 then return false end
+                    local ar, br = a._r, b._r
+                    if ar and br then for i = 1, 9 do if math.abs((ar[i] or 0)-(br[i] or 0)) > 1e-6 then return false end end end
+                    return true
+                end
+                cf_mt.__metatable = "CFrame"; cf_mt.__type = "CFrame"
+                cf_mt.__tostring = function(self) return string.format("%g, %g, %g", self.X or 0, self.Y or 0, self.Z or 0) end
+                cf_api.new = function(x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, r22)
+                    if (type(x) == "table" or type(x) == "userdata") and y == nil then return make_cf(x.X, x.Y, x.Z) end
+                    if r00 ~= nil and r22 ~= nil then return make_cf(x, y, z, {r00,r01,r02,r10,r11,r12,r20,r21,r22}) end
+                    return make_cf(tonumber(x) or 0, tonumber(y) or 0, tonumber(z) or 0)
+                end
+                cf_api.Angles = function(rx, ry, rz) return make_cf(0, 0, 0, rot_xyz(tonumber(rx) or 0, tonumber(ry) or 0, tonumber(rz) or 0)) end
+                cf_api.fromEulerAnglesXYZ = cf_api.Angles
+                cf_api.fromEulerAnglesYXZ = function(rx, ry, rz) return make_cf(0, 0, 0, rot_yxz(tonumber(rx) or 0, tonumber(ry) or 0, tonumber(rz) or 0)) end
+                cf_api.fromOrientation = cf_api.fromEulerAnglesYXZ
+                cf_api.lookAt = function(pos, target) return make_cf(pos and pos.X or 0, pos and pos.Y or 0, pos and pos.Z or 0) end
+                cf_api.fromAxisAngle = function(axis, angle)
+                    local ax, ay, az = axis.X or 0, axis.Y or 0, axis.Z or 0
+                    local m = math.sqrt(ax*ax + ay*ay + az*az)
+                    if m < 1e-12 then return make_cf(0, 0, 0) end
+                    ax, ay, az = ax/m, ay/m, az/m
+                    local a = tonumber(angle) or 0
+                    local c, s, t = math.cos(a), math.sin(a), 1 - math.cos(a)
+                    return make_cf(0, 0, 0, {t*ax*ax+c, t*ax*ay-s*az, t*ax*az+s*ay, t*ax*ay+s*az, t*ay*ay+c, t*ay*az-s*ax, t*ax*az-s*ay, t*ay*az+s*ax, t*az*az+c})
+                end
+                cf_api.fromMatrix = function(pos, rv, uv, lv)
+                    local l = lv or (rv and uv and rv:Cross(uv)) or {X=0,Y=0,Z=-1}
+                    return make_cf(pos and pos.X or 0, pos and pos.Y or 0, pos and pos.Z or 0, {rv and rv.X or 1, uv and uv.X or 0, -(l.X or 0), rv and rv.Y or 0, uv and uv.Y or 1, -(l.Y or 0), rv and rv.Z or 0, uv and uv.Z or 0, -(l.Z or -1)})
+                end
+                cf_api.identity = cf_api.new(0, 0, 0)
+                CFrame = cf_api
+
+                local _dt_list = {
+                    {"Vector2", Vector2}, {"Vector3", Vector3}, {"CFrame", CFrame}, {"Color3", Color3},
+                    {"UDim", UDim}, {"UDim2", UDim2}, {"TweenInfo", TweenInfo}, {"NumberRange", NumberRange},
+                    {"NumberSequence", NumberSequence}, {"NumberSequenceKeypoint", NumberSequenceKeypoint},
+                    {"ColorSequence", ColorSequence}, {"ColorSequenceKeypoint", ColorSequenceKeypoint},
+                    {"Ray", Ray}, {"Rect", Rect}, {"Region3", Region3}, {"Region3int16", Region3int16},
+                    {"Vector2int16", Vector2int16}, {"Vector3int16", Vector3int16},
+                    {"PhysicalProperties", PhysicalProperties}, {"Faces", Faces}, {"Axes", Axes},
+                    {"PathWaypoint", PathWaypoint}, {"RaycastParams", RaycastParams}, {"OverlapParams", OverlapParams},
+                    {"DateTime", DateTime}, {"Font", Font}, {"SharedTable", SharedTable},
+                    {"Content", Content}, {"Secret", Secret}, {"BrickColor", BrickColor},
+                    {"Random", Random}, {"Enum", Enum},
+                }
+                for _, _pair in ipairs(_dt_list) do
+                    local _k, _v = _pair[1], _pair[2]
+                    if _v ~= nil then
+                        final_env[_k] = _v
+                        rawset(_G, _k, _v)
+                    elseif rawget(_G, _k) ~= nil and final_env[_k] == nil then
+                        final_env[_k] = rawget(_G, _k)
+                    end
+                end
+                final_env.compareinstances = function(a, b)
+                    if rawequal(a, b) then return true end
+                    local ok_a, ba = pcall(rawget, a, "_base")
+                    if ok_a and ba ~= nil and rawequal(ba, b) then return true end
+                    local ok_b, bb = pcall(rawget, b, "_base")
+                    if ok_b and bb ~= nil and rawequal(a, bb) then return true end
+                    return false
+                end
+                rawset(_G, "compareinstances", final_env.compareinstances)
+                final_env.__FLAME_SAFE_VECTOR3 = Vector3
+                rawset(_G, "__FLAME_SAFE_VECTOR3", Vector3)
+                final_env.__FLAME_SAFE_COLOR3 = Color3 or rawget(_G, "__FLAME_SAFE_COLOR3")
+                rawset(_G, "__FLAME_SAFE_COLOR3", final_env.__FLAME_SAFE_COLOR3)
+                final_env.__FLAME_SAFE_NUMBER_SEQUENCE = NumberSequence or rawget(_G, "__FLAME_SAFE_NUMBER_SEQUENCE")
+                final_env.__FLAME_SAFE_NUMBER_SEQUENCE_KEYPOINT = NumberSequenceKeypoint or rawget(_G, "__FLAME_SAFE_NUMBER_SEQUENCE_KEYPOINT")
+                final_env.__FLAME_SAFE_COLOR_SEQUENCE = ColorSequence or rawget(_G, "__FLAME_SAFE_COLOR_SEQUENCE")
+                final_env.__FLAME_SAFE_COLOR_SEQUENCE_KEYPOINT = ColorSequenceKeypoint or rawget(_G, "__FLAME_SAFE_COLOR_SEQUENCE_KEYPOINT")
+            end
             local reloaded, reload_error = _real_load(prepared, "=script_main", "t", final_env)
             if reloaded then
                 chunk = reloaded
@@ -21357,85 +21869,6 @@ do
                 local result = {}
                 for key, item in pairs(value) do result[key] = item end
                 return result
-            end
-        end
-        if type(CFrame) == "table" and type(Vector3) == "table" and type(Vector3.new) == "function" then
-            local cf_mt = {}
-            local function vec(x, y, z) return Vector3.new(x or 0, y or 0, z or 0) end
-            local function identity() return {1,0,0,0,1,0,0,0,1} end
-            local function cf(x, y, z, r, look)
-                local result = {X = x or 0, Y = y or 0, Z = z or 0, _r = r or identity()}
-                if look then result._look = look end
-                return setmetatable(result, cf_mt)
-            end
-            local function inverse(value)
-                local r = value._r or identity()
-                local rt = {r[1],r[4],r[7],r[2],r[5],r[8],r[3],r[6],r[9]}
-                local x,y,z = value.X or 0, value.Y or 0, value.Z or 0
-                return cf(-(rt[1]*x+rt[2]*y+rt[3]*z), -(rt[4]*x+rt[5]*y+rt[6]*z), -(rt[7]*x+rt[8]*y+rt[9]*z), rt)
-            end
-            cf_mt.__index = function(self, key)
-                if key == "Position" or key == "p" then return vec(self.X, self.Y, self.Z) end
-                if key == "LookVector" and self._look then return self._look end
-                if key == "LookVector" then local r=self._r; return vec(-r[3],-r[6],-r[9]) end
-                if key == "RightVector" then local r=self._r; return vec(r[1],r[4],r[7]) end
-                if key == "UpVector" then local r=self._r; return vec(r[2],r[5],r[8]) end
-                if key == "ToObjectSpace" then return function(self, other) return inverse(self) * other end end
-                if key == "ToWorldSpace" then return function(self, other) return self * other end end
-                if key == "PointToWorldSpace" then return function(self, point) return self * point end end
-                if key == "PointToObjectSpace" then return function(self, point) return inverse(self) * point end end
-                if key == "Inverse" or key == "inverse" then return inverse end
-                if key == "GetComponents" or key == "components" then
-                    return function(self)
-                        local r=self._r
-                        local function f32(v)
-                            if string.pack and string.unpack then
-                                local ok, out = pcall(function() return string.unpack("<f", string.pack("<f", v or 0)) end)
-                                if ok then return out end
-                            end
-                            return v or 0
-                        end
-                        return f32(self.X),f32(self.Y),f32(self.Z),f32(r[1]),f32(r[2]),f32(r[3]),f32(r[4]),f32(r[5]),f32(r[6]),f32(r[7]),f32(r[8]),f32(r[9])
-                    end
-                end
-                if key == "ToEulerAnglesXYZ" or key == "toEulerAnglesXYZ" then return function() return 0,0,0 end end
-                return rawget(self, key)
-            end
-            cf_mt.__mul = function(a, b)
-                local ar=a._r or identity()
-                if b and b._r then
-                    local br=b._r
-                    local r={
-                        ar[1]*br[1]+ar[2]*br[4]+ar[3]*br[7], ar[1]*br[2]+ar[2]*br[5]+ar[3]*br[8], ar[1]*br[3]+ar[2]*br[6]+ar[3]*br[9],
-                        ar[4]*br[1]+ar[5]*br[4]+ar[6]*br[7], ar[4]*br[2]+ar[5]*br[5]+ar[6]*br[8], ar[4]*br[3]+ar[5]*br[6]+ar[6]*br[9],
-                        ar[7]*br[1]+ar[8]*br[4]+ar[9]*br[7], ar[7]*br[2]+ar[8]*br[5]+ar[9]*br[8], ar[7]*br[3]+ar[8]*br[6]+ar[9]*br[9]
-                    }
-                    return cf((a.X or 0)+ar[1]*(b.X or 0)+ar[2]*(b.Y or 0)+ar[3]*(b.Z or 0), (a.Y or 0)+ar[4]*(b.X or 0)+ar[5]*(b.Y or 0)+ar[6]*(b.Z or 0), (a.Z or 0)+ar[7]*(b.X or 0)+ar[8]*(b.Y or 0)+ar[9]*(b.Z or 0), r)
-                end
-                if b and b.X ~= nil then return vec((a.X or 0)+ar[1]*b.X+ar[2]*b.Y+ar[3]*b.Z,(a.Y or 0)+ar[4]*b.X+ar[5]*b.Y+ar[6]*b.Z,(a.Z or 0)+ar[7]*b.X+ar[8]*b.Y+ar[9]*b.Z) end
-                return a
-            end
-            cf_mt.__sub = function(a,b) return cf(a.X-b.X,a.Y-b.Y,a.Z-b.Z,a._r) end
-            cf_mt.__eq = function(a,b) return a.X==b.X and a.Y==b.Y and a.Z==b.Z end
-            cf_mt.__metatable = "CFrame"
-            cf_mt.__type = "CFrame"
-            CFrame.new = function(x,y,z)
-                if type(x) == "table" and y == nil then return cf(x.X,x.Y,x.Z) end
-                return cf(tonumber(x) or 0, tonumber(y) or 0, tonumber(z) or 0)
-            end
-            CFrame.identity = CFrame.new(0,0,0)
-            CFrame.lookAt = function(position, target)
-                local p = vec(position.X,position.Y,position.Z)
-                local direction = vec(target.X-position.X,target.Y-position.Y,target.Z-position.Z).Unit
-                return cf(position.X,position.Y,position.Z,nil,direction)
-            end
-            CFrame.fromAxisAngle = function(axis, angle)
-                local ax,ay,az=axis.X or 0,axis.Y or 0,axis.Z or 0
-                local m=math.sqrt(ax*ax+ay*ay+az*az)
-                if m < 1e-12 then return cf(0,0,0) end
-                ax,ay,az=ax/m,ay/m,az/m
-                local c,s,t=math.cos(angle or 0),math.sin(angle or 0),1-math.cos(angle or 0)
-                return cf(0,0,0,{t*ax*ax+c,t*ax*ay-s*az,t*ax*az+s*ay,t*ax*ay+s*az,t*ay*ay+c,t*ay*az-s*ax,t*ax*az-s*ay,t*ay*az+s*ax,t*az*az+c})
             end
         end
         if type(_G.TweenService) == "table" and type(_G.TweenService.Create) == "function" then
@@ -22010,14 +22443,7 @@ do
             _flame_instance_count = _flame_instance_count + 1
             _flame_instances[#_flame_instances + 1] = object
             local class = tostring(class_name or "")
-            if class == "Model" then
-                local scale = 1
-                pcall(rawset, object, "ScaleTo", function(_, value) scale = tonumber(value) or scale end)
-                pcall(rawset, object, "GetScale", function() return scale end)
-                local pivot
-                pcall(rawset, object, "PivotTo", function(_, value) pivot = value end)
-                pcall(rawset, object, "GetPivot", function() return pivot or CFrame.new() end)
-            elseif class == "Humanoid" then
+            if class == "Humanoid" then
                 pcall(rawset, object, "GetState", function() return Enum.HumanoidStateType and (Enum.HumanoidStateType.Running or Enum.HumanoidStateType.Landed) end)
             elseif class == "AngularVelocity" or class == "LinearVelocity" then
                 pcall(rawset, object, "__flame_constraint_class", class)
@@ -22477,7 +22903,9 @@ do
         if _camera == nil then
             _camera = _old_new and _old_new("Camera") or nil
             if _camera then
-                pcall(rawset, _camera, "CameraType", _enum_item("Custom", 0))
+                pcall(function()
+                    _camera.CameraType = (Enum and Enum.CameraType and Enum.CameraType.Custom) or _enum_item("Custom", 5)
+                end)
                 pcall(rawset, _env.workspace, "CurrentCamera", _camera)
             end
         end
@@ -23042,8 +23470,7 @@ do
         return t
     end
 
-    -- Normalize Vector3 into a deterministic sandbox value table
-    do
+    if type(_G.Vector3) ~= "table" or _G.Vector3.FromAxis == nil then
         local old_api = _G.Vector3
         local api = {}
         if type(old_api) == "table" then

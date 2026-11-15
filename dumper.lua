@@ -5232,9 +5232,10 @@ createProxyObject = function(objName, isGlobal, parentProxy)
     end
     serviceMethods.Destroy = function(self)
         _at.destroyed = _at.destroyed or {}
-        _at.destroyed[proxy] = true
+        if _at.destroyed[proxy] then return end
         local parentPath = resolveParentPath(proxy)
         _setParent(proxy, nil)
+        _at.destroyed[proxy] = true
         emitOutput(string.format("%s:Destroy()", parentPath))
     end
     serviceMethods.ClearAllChildren = function(self)
@@ -5788,20 +5789,118 @@ createProxyObject = function(objName, isGlobal, parentProxy)
         emitOutput(string.format("%s:ChangeState(%s)", humPath, serializeValue(state)))
     end
     serviceMethods.GetState = function(self) return createProxyObject("Enum.HumanoidStateType.Running", false) end
+    local function _getModelBounds(modelProxy)
+        local desc = _getAllDescendants(modelProxy)
+        local minX, minY, minZ = math.huge, math.huge, math.huge
+        local maxX, maxY, maxZ = -math.huge, -math.huge, -math.huge
+        local found = false
+        for _, child in ipairsFunction(desc) do
+            local cp = dumperState.property_store[child]
+            if cp and classIsA(cp.ClassName or "", "BasePart") then
+                found = true
+                local cf = cp.CFrame or (cp.Position and CFrame.new(cp.Position)) or CFrame.new(0, 0, 0)
+                local sz = cp.Size or Vector3.new(4, 1, 2)
+                local hx, hy, hz = (sz.X or 4) * 0.5, (sz.Y or 1) * 0.5, (sz.Z or 2) * 0.5
+                for sx = -1, 1, 2 do
+                    for sy = -1, 1, 2 do
+                        for szSign = -1, 1, 2 do
+                            local corner = cf * Vector3.new(hx * sx, hy * sy, hz * szSign)
+                            if corner.X < minX then minX = corner.X end
+                            if corner.Y < minY then minY = corner.Y end
+                            if corner.Z < minZ then minZ = corner.Z end
+                            if corner.X > maxX then maxX = corner.X end
+                            if corner.Y > maxY then maxY = corner.Y end
+                            if corner.Z > maxZ then maxZ = corner.Z end
+                        end
+                    end
+                end
+            end
+        end
+        if not found then
+            local mprops = dumperState.property_store[modelProxy]
+            local fallbackCf = (mprops and mprops.WorldPivot) or CFrame.new(0, 0, 0)
+            return fallbackCf, Vector3.new(0, 0, 0)
+        end
+        return CFrame.new((minX + maxX) * 0.5, (minY + maxY) * 0.5, (minZ + maxZ) * 0.5),
+            Vector3.new(maxX - minX, maxY - minY, maxZ - minZ)
+    end
+    local function _getModelPivot(modelProxy)
+        local mprops = dumperState.property_store[modelProxy]
+        if mprops and mprops.WorldPivot ~= nil then
+            return mprops.WorldPivot
+        end
+        if mprops and mprops.PrimaryPart and isProxy(mprops.PrimaryPart) then
+            local pp = dumperState.property_store[mprops.PrimaryPart]
+            if pp and pp.CFrame then return pp.CFrame end
+        end
+        local bbCf = _getModelBounds(modelProxy)
+        return bbCf
+    end
+    local function _pivotModel(modelProxy, targetCf)
+        if typeFunction(targetCf) ~= "table" or targetCf.X == nil then
+            errorFunction("CFrame expected for PivotTo", 2)
+        end
+        local oldPivot = _getModelPivot(modelProxy)
+        local delta = targetCf * oldPivot:Inverse()
+        local desc = _getAllDescendants(modelProxy)
+        for _, child in ipairsFunction(desc) do
+            local cp = dumperState.property_store[child]
+            if cp and classIsA(cp.ClassName or "", "BasePart") then
+                local oldCf = cp.CFrame or (cp.Position and CFrame.new(cp.Position)) or CFrame.new(0, 0, 0)
+                local newCf = delta * oldCf
+                cp.CFrame = newCf
+                cp.Position = newCf.Position
+            end
+        end
+        dumperState.property_store[modelProxy] = dumperState.property_store[modelProxy] or {}
+        dumperState.property_store[modelProxy].WorldPivot = targetCf
+    end
     serviceMethods.SetPrimaryPartCFrame = function(self, cf)
         local modelPath = dumperState.registry[proxy] or "model"
+        local mprops = dumperState.property_store[proxy]
+        if mprops and mprops.PrimaryPart and isProxy(mprops.PrimaryPart) then
+            local pp = dumperState.property_store[mprops.PrimaryPart]
+            local oldCf = (pp and pp.CFrame) or CFrame.new(0, 0, 0)
+            local delta = cf * oldCf:Inverse()
+            for _, child in ipairsFunction(_getAllDescendants(proxy)) do
+                local cp = dumperState.property_store[child]
+                if cp and classIsA(cp.ClassName or "", "BasePart") then
+                    local newCf = delta * (cp.CFrame or CFrame.new(0, 0, 0))
+                    cp.CFrame = newCf
+                    cp.Position = newCf.Position
+                end
+            end
+            if mprops.WorldPivot then mprops.WorldPivot = delta * mprops.WorldPivot end
+        else
+            _pivotModel(proxy, cf)
+        end
         emitOutput(string.format("%s:SetPrimaryPartCFrame(%s)", modelPath, serializeValue(cf)))
     end
-    serviceMethods.GetPrimaryPartCFrame = function(self) return CFrame.new(0, 0, 0) end
+    serviceMethods.GetPrimaryPartCFrame = function(self)
+        local mprops = dumperState.property_store[proxy]
+        if mprops and mprops.PrimaryPart and isProxy(mprops.PrimaryPart) then
+            local pp = dumperState.property_store[mprops.PrimaryPart]
+            if pp and pp.CFrame then return pp.CFrame end
+        end
+        return _getModelPivot(proxy)
+    end
     serviceMethods.PivotTo = function(self, cf)
         local modelPath = dumperState.registry[proxy] or "model"
+        _pivotModel(proxy, cf)
         emitOutput(string.format("%s:PivotTo(%s)", modelPath, serializeValue(cf)))
     end
-    serviceMethods.GetPivot = function(self) return CFrame.new(0, 0, 0) end
-    serviceMethods.GetBoundingBox = function(self) return CFrame.new(0, 0, 0), Vector3.new(1, 1, 1) end
-    serviceMethods.GetExtentsSize = function(self) return Vector3.new(1, 1, 1) end
+    serviceMethods.GetPivot = function(self) return _getModelPivot(proxy) end
+    serviceMethods.GetBoundingBox = function(self) return _getModelBounds(proxy) end
+    serviceMethods.GetExtentsSize = function(self)
+        local _, sz = _getModelBounds(proxy)
+        return sz
+    end
     serviceMethods.TranslateBy = function(self, vec)
         local modelPath = dumperState.registry[proxy] or "model"
+        if typeFunction(vec) == "table" and vec.X ~= nil then
+            local cur = _getModelPivot(proxy)
+            _pivotModel(proxy, CFrame.new(vec.X or 0, vec.Y or 0, vec.Z or 0) * cur)
+        end
         emitOutput(string.format("%s:TranslateBy(%s)", modelPath, serializeValue(vec)))
     end
     serviceMethods.LoadAnimation = function(self, anim)
@@ -7193,6 +7292,17 @@ createProxyObject = function(objName, isGlobal, parentProxy)
         if dumperState.property_store[proxy] and dumperState.property_store[proxy][key] ~= nil then
             return dumperState.property_store[proxy][key]
         end
+        do
+            local _ps = dumperState.property_store[proxy]
+            if _ps then
+                if key == "PrimaryPart" and _ps.ClassName == "Model" and formattedName ~= "Character" then
+                    return _ps.PrimaryPart
+                end
+                if key == "Value" and _ps.ClassName == "ObjectValue" then
+                    return _ps.Value
+                end
+            end
+        end
         if pathName == "Stats" and key == "Network" then
             local network = createProxyObject("Stats.Network", false, proxy)
             dumperState.property_store[network] = {
@@ -7544,15 +7654,66 @@ createProxyObject = function(objName, isGlobal, parentProxy)
         local prop = formatValue(key)
         dumperState.property_store[proxy] = dumperState.property_store[proxy] or {}
         local props = dumperState.property_store[proxy]
-        if props.ClassName == "Camera" and (key == "NearPlaneZ" or _propertyName(key) == "NearPlaneZ") then
+        local instClass = props.ClassName or ""
+        local propertyKey = _propertyName(key)
+        if propertyKey == "ClassName" then
+            error("ClassName is read only", 2)
+        end
+        if instClass == "Camera" and propertyKey == "NearPlaneZ" then
             error("NearPlaneZ is read only", 2)
         end
-        if props.ClassName == "Model" and (key == "PrimaryPart" or _propertyName(key) == "PrimaryPart") then
+        if instClass == "Model" and propertyKey == "PrimaryPart" then
             if val ~= nil and (not isProxy(val) or not classIsA(dumperState.property_store[val] and dumperState.property_store[val].ClassName or "", "BasePart")) then
                 error("PrimaryPart can only be set to a BasePart", 2)
             end
         end
-        local propertyKey = _propertyName(key)
+        do
+            local _enumProps = {
+                Shape = "PartType", Material = "Material", CameraType = "CameraType",
+                SizeConstraint = "SizeConstraint", AutomaticSize = "AutomaticSize",
+                BorderMode = "BorderMode", ScaleType = "ScaleType",
+                ZIndexBehavior = "ZIndexBehavior", SortOrder = "SortOrder",
+                TextXAlignment = "TextXAlignment", TextYAlignment = "TextYAlignment",
+                RigType = "HumanoidRigType", EasingStyle = "EasingStyle",
+                EasingDirection = "EasingDirection", CreatorType = "CreatorType",
+            }
+            local _expectedEnum = _enumProps[propertyKey]
+            if _expectedEnum and (propertyKey ~= "Shape" or classIsA(instClass, "Part")) then
+                local _isEnumItem = (_at.typeOverride[val] == "EnumItem")
+                local _valProps = _isEnumItem and dumperState.property_store[val] or nil
+                local _expectedEnumObj = Enum[_expectedEnum]
+                if not (_isEnumItem and _valProps and _valProps.EnumType == _expectedEnumObj) then
+                    error("Unable to assign property " .. propertyKey .. ". EnumItem of type " .. _expectedEnum .. " expected", 2)
+                end
+            end
+            local _numProps = {
+                Transparency = true, Reflectance = true, Rotation = true,
+                ZIndex = true, LayoutOrder = true, BorderSizePixel = true,
+                BackgroundTransparency = true, TextSize = true, TextTransparency = true,
+                TextStrokeTransparency = true, ImageTransparency = true, LineHeight = true,
+                FieldOfView = true, WalkSpeed = true, JumpPower = true, JumpHeight = true,
+                HipHeight = true, Health = true, MaxHealth = true, MaxSlopeAngle = true,
+                Volume = true, PlaybackSpeed = true, TimePosition = true,
+                Brightness = true, ClockTime = true, Range = true, Angle = true,
+                Intensity = true, Thickness = true, Density = true, TimeScale = true,
+            }
+            if _numProps[propertyKey] or (propertyKey == "Value" and (instClass == "NumberValue" or instClass == "IntValue")) then
+                if typeFunction(val) ~= "number" then
+                    error("Unable to assign property " .. propertyKey .. ". number expected", 2)
+                end
+            end
+            if propertyKey == "Position" and classIsA(instClass, "BasePart") and typeFunction(val) == "table" and val.X ~= nil then
+                local oldCf = props.CFrame
+                if typeFunction(oldCf) == "table" and oldCf._r then
+                    local r = oldCf._r
+                    props.CFrame = CFrame.new(val.X or 0, val.Y or 0, val.Z or 0, r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9])
+                else
+                    props.CFrame = CFrame.new(val.X or 0, val.Y or 0, val.Z or 0)
+                end
+            elseif propertyKey == "CFrame" and classIsA(instClass, "BasePart") and typeFunction(val) == "table" and val.X ~= nil then
+                props.Position = val.Position or Vector3.new(val.X or 0, val.Y or 0, val.Z or 0)
+            end
+        end
         val = _coercePropertyValue(propertyKey, val)
         dumperState.property_store[proxy][key] = val
         local defaults = _at.propertyDefaults[proxy]
@@ -8105,7 +8266,7 @@ TweenInfo = {new = function(timeValue, style, direction, repeatCount, reverses, 
     else
         repeatCountNumber = math.floor(repeatCountNumber)
     end
-    return _valueType("TweenInfo", {Time = _num(timeValue), EasingStyle = style or Enum.EasingStyle.Quad,
+    return _valueType("TweenInfo", {Time = timeValue ~= nil and _num(timeValue) or 1, EasingStyle = style or Enum.EasingStyle.Quad,
         EasingDirection = direction or Enum.EasingDirection.Out, RepeatCount = repeatCountNumber,
         Reverses = reverses or false, DelayTime = delayTime or 0})
 end}
@@ -8180,30 +8341,66 @@ RotationCurveKey = {new = function(timeValue, value, interpolation)
     })
 end}
 PhysicalProperties = {new = function(density, friction, elasticity, frictionWeight, elasticityWeight) return _valueType("PhysicalProperties", {Density = _num(density, 1), Friction = _num(friction, 0.3), Elasticity = _num(elasticity, 0.5), FrictionWeight = _num(frictionWeight, 1), ElasticityWeight = _num(elasticityWeight, 1)}) end}
-_makeCFrame = function(x, y, z, expr, rx, ry, rz)
+local function _rotFromXYZ(rx, ry, rz)
+    local cx, sx = math.cos(rx), math.sin(rx)
+    local cy, sy = math.cos(ry), math.sin(ry)
+    local cz, sz = math.cos(rz), math.sin(rz)
+    return {
+        cy * cz, -cy * sz, sy,
+        cx * sz + sx * sy * cz, cx * cz - sx * sy * sz, -sx * cy,
+        sx * sz - cx * sy * cz, sx * cz + cx * sy * sz, cx * cy,
+    }
+end
+local function _rotFromYXZ(rx, ry, rz)
+    local cx, sx = math.cos(rx), math.sin(rx)
+    local cy, sy = math.cos(ry), math.sin(ry)
+    local cz, sz = math.cos(rz), math.sin(rz)
+    return {
+        cy * cz + sy * sx * sz, -cy * sz + sy * sx * cz, sy * cx,
+        cx * sz, cx * cz, -sx,
+        -sy * cz + cy * sx * sz, sy * sz + cy * sx * cz, cy * cx,
+    }
+end
+_makeCFrame = function(x, y, z, expr, rx, ry, rz, rot)
     if typeFunction(x) == "table" then
         local mx = getMetatableFunction(x)
         if mx and mx.__typeof == "Vector3" then
-            x = x.X
+            y = x.Y; z = x.Z; x = x.X
         end
     end
     local ox, oy, oz = _num(x), _num(y), _num(z)
-    local obj = {X = ox, Y = oy, Z = oz, _rx = _num(rx), _ry = _num(ry), _rz = _num(rz)}
+    local erx, ery, erz = _num(rx), _num(ry), _num(rz)
+    local r = rot
+    if typeFunction(r) ~= "table" then
+        if erx ~= 0 or ery ~= 0 or erz ~= 0 then
+            r = _rotFromXYZ(erx, ery, erz)
+        else
+            r = {1, 0, 0, 0, 1, 0, 0, 0, 1}
+        end
+    end
+    local obj = {X = ox, Y = oy, Z = oz, _rx = erx, _ry = ery, _rz = erz, _r = r}
     obj.Position = Vector3.new(ox, oy, oz)
     obj.p = obj.Position
-    obj.LookVector = Vector3.new(0, 0, -1)
-    obj.RightVector = Vector3.new(1, 0, 0)
-    obj.UpVector = Vector3.new(0, 1, 0)
+    obj.RightVector = Vector3.new(r[1], r[4], r[7])
+    obj.UpVector = Vector3.new(r[2], r[5], r[8])
+    obj.LookVector = Vector3.new(-r[3], -r[6], -r[9])
     obj.ToEulerAnglesXYZ = function(self) return self._rx or 0, self._ry or 0, self._rz or 0 end
     obj.ToEulerAnglesYXZ = function(self) return self._rx or 0, self._ry or 0, self._rz or 0 end
     obj.ToAxisAngle = function(self)
-        local rx, ry, rz = self._rx or 0, self._ry or 0, self._rz or 0
-        local angle = math.sqrt(rx * rx + ry * ry + rz * rz)
+        local rxv, ryv, rzv = self._rx or 0, self._ry or 0, self._rz or 0
+        local angle = math.sqrt(rxv * rxv + ryv * ryv + rzv * rzv)
         if angle == 0 then return Vector3.yAxis, 0 end
-        return Vector3.new(rx / angle, ry / angle, rz / angle), angle
+        return Vector3.new(rxv / angle, ryv / angle, rzv / angle), angle
     end
     obj.VectorToObjectSpace = function(self, vector)
-        return Vector3.new(vector and vector.X or 0, vector and vector.Y or 0, vector and vector.Z or 0)
+        local m = self._r
+        local vx, vy, vz = vector and vector.X or 0, vector and vector.Y or 0, vector and vector.Z or 0
+        return Vector3.new(m[1]*vx + m[4]*vy + m[7]*vz, m[2]*vx + m[5]*vy + m[8]*vz, m[3]*vx + m[6]*vy + m[9]*vz)
+    end
+    obj.VectorToWorldSpace = function(self, vector)
+        local m = self._r
+        local vx, vy, vz = vector and vector.X or 0, vector and vector.Y or 0, vector and vector.Z or 0
+        return Vector3.new(m[1]*vx + m[2]*vy + m[3]*vz, m[4]*vx + m[5]*vy + m[6]*vz, m[7]*vx + m[8]*vy + m[9]*vz)
     end
     obj.Lerp = function(self, other, alpha)
         alpha = _num(alpha)
@@ -8215,34 +8412,32 @@ _makeCFrame = function(x, y, z, expr, rx, ry, rz)
             (self._ry or 0) + ((other._ry or 0) - (self._ry or 0)) * alpha,
             (self._rz or 0) + ((other._rz or 0) - (self._rz or 0)) * alpha)
     end
-    obj.GetComponents = function(self) return ox, oy, oz, 1, 0, 0, 0, 1, 0, 0, 0, 1 end
-    obj.Inverse = function(self) return _makeCFrame(-ox, -oy, -oz) end
+    obj.GetComponents = function(self)
+        local m = self._r
+        return ox, oy, oz, m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9]
+    end
+    obj.Inverse = function(self)
+        local m = self._r
+        local rt = {m[1], m[4], m[7], m[2], m[5], m[8], m[3], m[6], m[9]}
+        local ix = -(rt[1]*ox + rt[2]*oy + rt[3]*oz)
+        local iy = -(rt[4]*ox + rt[5]*oy + rt[6]*oz)
+        local iz = -(rt[7]*ox + rt[8]*oy + rt[9]*oz)
+        return _makeCFrame(ix, iy, iz, nil, -(self._rx or 0), -(self._ry or 0), -(self._rz or 0), rt)
+    end
     obj.ToOrientation = function(self) return self._rx or 0, self._ry or 0, self._rz or 0 end
     obj.ToObjectSpace = function(self, other)
-        local ox2 = (other and (other.X or 0)) or 0
-        local oy2 = (other and (other.Y or 0)) or 0
-        local oz2 = (other and (other.Z or 0)) or 0
-        return _makeCFrame(ox2 - ox, oy2 - oy, oz2 - oz)
+        return self:Inverse() * (other or CFrame.new())
     end
     obj.ToWorldSpace = function(self, other)
-        local ox2 = (other and (other.X or 0)) or 0
-        local oy2 = (other and (other.Y or 0)) or 0
-        local oz2 = (other and (other.Z or 0)) or 0
-        return _makeCFrame(ox + ox2, oy + oy2, oz + oz2)
+        return self * (other or CFrame.new())
     end
     obj.PointToObjectSpace = function(self, point)
-        return Vector3.new(
-            (point and point.X or 0) - ox,
-            (point and point.Y or 0) - oy,
-            (point and point.Z or 0) - oz
-        )
+        return self:Inverse():PointToWorldSpace(point)
     end
     obj.PointToWorldSpace = function(self, point)
-        return Vector3.new(
-            (point and point.X or 0) + ox,
-            (point and point.Y or 0) + oy,
-            (point and point.Z or 0) + oz
-        )
+        local m = self._r
+        local px, py, pz = point and point.X or 0, point and point.Y or 0, point and point.Z or 0
+        return Vector3.new(ox + m[1]*px + m[2]*py + m[3]*pz, oy + m[4]*px + m[5]*py + m[6]*pz, oz + m[7]*px + m[8]*py + m[9]*pz)
     end
     return setmetatable(obj, {
         __typeof = "CFrame",
@@ -8251,17 +8446,45 @@ _makeCFrame = function(x, y, z, expr, rx, ry, rz)
         __mul = function(a, b)
             local ma = getMetatableFunction(a)
             local mb = getMetatableFunction(b)
+            local ar = a._r or {1, 0, 0, 0, 1, 0, 0, 0, 1}
             if mb and mb.__typeof == "CFrame" then
+                local br = b._r or {1, 0, 0, 0, 1, 0, 0, 0, 1}
                 local ax = (ma and ma.__cframeExpr) or string.format("CFrame.new(%s, %s, %s)", a.X, a.Y, a.Z)
                 local bx = (mb and mb.__cframeExpr) or string.format("CFrame.new(%s, %s, %s)", b.X, b.Y, b.Z)
-                return _makeCFrame(a.X + b.X, a.Y + b.Y, a.Z + b.Z, "(" .. ax .. " * " .. bx .. ")", (a._rx or 0) + (b._rx or 0), (a._ry or 0) + (b._ry or 0), (a._rz or 0) + (b._rz or 0))
+                local nr = {
+                    ar[1]*br[1]+ar[2]*br[4]+ar[3]*br[7], ar[1]*br[2]+ar[2]*br[5]+ar[3]*br[8], ar[1]*br[3]+ar[2]*br[6]+ar[3]*br[9],
+                    ar[4]*br[1]+ar[5]*br[4]+ar[6]*br[7], ar[4]*br[2]+ar[5]*br[5]+ar[6]*br[8], ar[4]*br[3]+ar[5]*br[6]+ar[6]*br[9],
+                    ar[7]*br[1]+ar[8]*br[4]+ar[9]*br[7], ar[7]*br[2]+ar[8]*br[5]+ar[9]*br[8], ar[7]*br[3]+ar[8]*br[6]+ar[9]*br[9],
+                }
+                local bx0, by0, bz0 = b.X or 0, b.Y or 0, b.Z or 0
+                return _makeCFrame(
+                    (a.X or 0) + ar[1]*bx0 + ar[2]*by0 + ar[3]*bz0,
+                    (a.Y or 0) + ar[4]*bx0 + ar[5]*by0 + ar[6]*bz0,
+                    (a.Z or 0) + ar[7]*bx0 + ar[8]*by0 + ar[9]*bz0,
+                    "(" .. ax .. " * " .. bx .. ")", nil, nil, nil, nr
+                )
             end
             if mb and mb.__typeof == "Vector3" then
-                return Vector3.new(a.X + b.X, a.Y + b.Y, a.Z + b.Z)
+                local vx, vy, vz = b.X or 0, b.Y or 0, b.Z or 0
+                return Vector3.new(
+                    (a.X or 0) + ar[1]*vx + ar[2]*vy + ar[3]*vz,
+                    (a.Y or 0) + ar[4]*vx + ar[5]*vy + ar[6]*vz,
+                    (a.Z or 0) + ar[7]*vx + ar[8]*vy + ar[9]*vz
+                )
             end
             return a
         end,
-        __eq = function(a, b) return typeFunction(b) == "table" and a.X == b.X and a.Y == b.Y and a.Z == b.Z end,
+        __eq = function(a, b)
+            if typeFunction(b) ~= "table" or b.X == nil then return false end
+            if a.X ~= b.X or a.Y ~= b.Y or a.Z ~= b.Z then return false end
+            local ar, br = a._r, b._r
+            if ar and br then
+                for i = 1, 9 do
+                    if math.abs((ar[i] or 0) - (br[i] or 0)) > 1e-6 then return false end
+                end
+            end
+            return true
+        end,
         __tostring = function(a) return expr or ("CFrame.new(%s, %s, %s)"):format(a.X, a.Y, a.Z) end,
     })
 end
@@ -8271,7 +8494,7 @@ local function _isVec3(v)
     return m and m.__typeof == "Vector3" or false
 end
 CFrame = {
-    new = function(x, y, z)
+    new = function(x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, r22)
         if _isVec3(x) then
             local px, py, pz = x.X or 0, x.Y or 0, x.Z or 0
             if _isVec3(y) then
@@ -8279,10 +8502,14 @@ CFrame = {
             end
             return _makeCFrame(px, py, pz, string.format("CFrame.new(%s)", serializeValue(x)))
         end
+        if r00 ~= nil and r22 ~= nil then
+            return _makeCFrame(x, y, z, nil, 0, 0, 0, {_num(r00), _num(r01), _num(r02), _num(r10), _num(r11), _num(r12), _num(r20), _num(r21), _num(r22)})
+        end
         return _makeCFrame(x, y, z)
     end,
     Angles = function(rx, ry, rz)
-        return _makeCFrame(0, 0, 0, string.format("CFrame.Angles(%s, %s, %s)", serializeValue(_num(rx)), serializeValue(_num(ry)), serializeValue(_num(rz))), _num(rx), _num(ry), _num(rz))
+        local nrx, nry, nrz = _num(rx), _num(ry), _num(rz)
+        return _makeCFrame(0, 0, 0, string.format("CFrame.Angles(%s, %s, %s)", serializeValue(nrx), serializeValue(nry), serializeValue(nrz)), nrx, nry, nrz, _rotFromXYZ(nrx, nry, nrz))
     end,
     lookAt = function(origin, target)
         if _isVec3(origin) and _isVec3(target) then
@@ -8293,17 +8520,29 @@ CFrame = {
     end,
     LookAt = function(origin, target) return CFrame.lookAt(origin, target) end,
     fromEulerAnglesXYZ = function(rx, ry, rz)
+        local nrx, nry, nrz = _num(rx), _num(ry), _num(rz)
         return _makeCFrame(0, 0, 0, string.format("CFrame.fromEulerAnglesXYZ(%s, %s, %s)",
-            serializeValue(_num(rx)), serializeValue(_num(ry)), serializeValue(_num(rz))))
+            serializeValue(nrx), serializeValue(nry), serializeValue(nrz)), nrx, nry, nrz, _rotFromXYZ(nrx, nry, nrz))
     end,
     fromEulerAnglesYXZ = function(rx, ry, rz)
+        local nrx, nry, nrz = _num(rx), _num(ry), _num(rz)
         return _makeCFrame(0, 0, 0, string.format("CFrame.fromEulerAnglesYXZ(%s, %s, %s)",
-            serializeValue(_num(rx)), serializeValue(_num(ry)), serializeValue(_num(rz))))
+            serializeValue(nrx), serializeValue(nry), serializeValue(nrz)), nrx, nry, nrz, _rotFromYXZ(nrx, nry, nrz))
     end,
     fromAxisAngle = function(axis, angle)
         if _isVec3(axis) then
+            local ax, ay, az = axis.X or 0, axis.Y or 0, axis.Z or 0
+            local m = math.sqrt(ax*ax + ay*ay + az*az)
+            local rot = nil
+            if m >= 1e-12 then
+                ax, ay, az = ax/m, ay/m, az/m
+                local a = _num(angle)
+                local c, s = math.cos(a), math.sin(a)
+                local t = 1 - c
+                rot = {t*ax*ax+c, t*ax*ay-s*az, t*ax*az+s*ay, t*ax*ay+s*az, t*ay*ay+c, t*ay*az-s*ax, t*ax*az-s*ay, t*ay*az+s*ax, t*az*az+c}
+            end
             return _makeCFrame(0, 0, 0, string.format("CFrame.fromAxisAngle(%s, %s)",
-                serializeValue(axis), serializeValue(_num(angle))))
+                serializeValue(axis), serializeValue(_num(angle))), 0, 0, 0, rot)
         end
         return _makeCFrame(0, 0, 0)
     end,
@@ -8313,14 +8552,20 @@ CFrame = {
             if _isVec3(rv) then args[#args + 1] = serializeValue(rv) end
             if _isVec3(uv) then args[#args + 1] = serializeValue(uv) end
             if _isVec3(lv) then args[#args + 1] = serializeValue(lv) end
+            local rot = nil
+            if _isVec3(rv) and _isVec3(uv) then
+                local l = _isVec3(lv) and lv or rv:Cross(uv)
+                rot = {rv.X or 1, uv.X or 0, -(l.X or 0), rv.Y or 0, uv.Y or 1, -(l.Y or 0), rv.Z or 0, uv.Z or 0, -(l.Z or -1)}
+            end
             return _makeCFrame(pos.X or 0, pos.Y or 0, pos.Z or 0,
-                string.format("CFrame.fromMatrix(%s)", table.concat(args, ", ")))
+                string.format("CFrame.fromMatrix(%s)", table.concat(args, ", ")), 0, 0, 0, rot)
         end
         return _makeCFrame(pos and pos.X or 0, pos and pos.Y or 0, pos and pos.Z or 0)
     end,
     fromOrientation = function(rx, ry, rz)
+        local nrx, nry, nrz = _num(rx), _num(ry), _num(rz)
         return _makeCFrame(0, 0, 0, string.format("CFrame.fromOrientation(%s, %s, %s)",
-            serializeValue(_num(rx)), serializeValue(_num(ry)), serializeValue(_num(rz))), _num(rx), _num(ry), _num(rz))
+            serializeValue(nrx), serializeValue(nry), serializeValue(nrz)), nrx, nry, nrz, _rotFromYXZ(nrx, nry, nrz))
     end,
 }
 CFrame.identity = CFrame.new(0, 0, 0)
@@ -8570,7 +8815,11 @@ enumMeta.__index = function(_, key)
                 local itemProxy = createProxyObject(fullItemPath, false)
                 dumperState.registry[itemProxy] = fullItemPath
                 _at.typeOverride[itemProxy] = "EnumItem"
-                dumperState.property_store[itemProxy] = {Name = formatValue(itemKey), EnumType = enumProxy, Value = 0}
+                local itemStr = formatValue(itemKey)
+                local shortEnum = formatValue(key)
+                local enumDef = _apiEnums[shortEnum]
+                local itemVal = (typeFunction(enumDef) == "table" and enumDef.values and enumDef.values[itemStr]) or 0
+                dumperState.property_store[itemProxy] = {Name = itemStr, EnumType = enumProxy, Value = itemVal}
                 _at.enumItems[fullItemPath] = itemProxy
             end
             return _at.enumItems[fullItemPath]
@@ -8582,54 +8831,124 @@ end
 Instance = {new = function(className, parent)
         local name = formatValue(className)
         local _notCreatable = {
-            DataModel = true, ServiceProvider = true, Workspace = true, CoreGui = true,
-            Players = true, Lighting = true, ReplicatedStorage = true, ServerStorage = true,
-            ServerScriptService = true, StarterGui = true, StarterPlayer = true, StarterPack = true,
-            StarterGear = true, SoundService = true, Teams = true, Chat = true, TestService = true
+            Object = true, Instance = true, DataModel = true, PVInstance = true,
+            BasePart = true, FormFactorPart = true, TriangleMeshPart = true, PartOperation = true,
+            GuiBase = true, GuiBase2d = true, GuiBase3d = true, GuiObject = true, GuiButton = true,
+            LayerCollector = true, ValueBase = true, Constraint = true, JointInstance = true,
+            ServiceProvider = true, GenericSettings = true, UIBase = true, UIComponent = true,
+            UILayout = true, UIGridStyleLayout = true, PostEffect = true, Light = true,
+            DataModelMesh = true, Player = true, Workspace = true, CoreGui = true,
+            Players = true, Lighting = true, ReplicatedStorage = true, ReplicatedFirst = true,
+            ServerStorage = true, ServerScriptService = true, StarterGui = true,
+            StarterPlayer = true, StarterPack = true, StarterGear = true, SoundService = true,
+            Teams = true, Chat = true, Debris = true, HttpService = true, CollectionService = true,
+            MarketplaceService = true, PathfindingService = true, PhysicsService = true,
+            ContextActionService = true, TeleportService = true, Stats = true, TestService = true,
+            TextService = true, GuiService = true, TextChatService = true, AssetService = true,
+            ContentProvider = true, InsertService = true, LocalizationService = true,
+            PolicyService = true, MemoryStoreService = true, MessagingService = true,
+            DataStoreService = true, AnalyticsService = true, BadgeService = true,
+            VirtualInputManager = true, UserSettings = true, RunService = true,
+            TweenService = true, UserInputService = true,
         }
         if _notCreatable[name] or name == "DataModel" then
             error("Instance of class " .. name .. " cannot be created", 2)
         end
         local proxy = createProxyObject(name, false)
         local varName = registerVariable(proxy, name)
-        dumperState.property_store[proxy] = {ClassName = name, Name = name, Archivable = true, Transparency = 0}
-        if name == "Sound" then
-            dumperState.property_store[proxy].PlaybackLoudness = 1
-        elseif name == "Frame" or name == "ScrollingFrame" then
-            dumperState.property_store[proxy].AbsoluteSize = Vector2.new(960, 540)
-        elseif name == "TextLabel" or name == "TextButton" or name == "TextBox" then
-            dumperState.property_store[proxy].TextBounds = Vector2.new(100, 18)
-            dumperState.property_store[proxy].Position = UDim2.new(0, 0, 0, 0)
-            dumperState.property_store[proxy].Size = UDim2.new(0, 100, 0, 50)
-            if name == "TextBox" then
-                dumperState.property_store[proxy].ClearTextOnFocus = true
+        local props = {ClassName = name, Name = name, Archivable = true}
+        if classIsA(name, "BasePart") then
+            props.Transparency = 0
+            props.Reflectance = 0
+            props.Anchored = false
+            props.CanCollide = true
+            props.CanTouch = true
+            props.CanQuery = true
+            props.Massless = false
+            props.Locked = false
+            props.CastShadow = true
+            props.Size = Vector3.new(4, 1, 2)
+            props.Position = Vector3.new(0, 0, 0)
+            props.CFrame = CFrame.new(0, 0, 0)
+            props.Orientation = Vector3.new(0, 0, 0)
+            props.Rotation = Vector3.new(0, 0, 0)
+            props.Color = Color3.fromRGB(163, 162, 165)
+            props.BrickColor = BrickColor.new("Medium stone grey")
+            props.Material = Enum.Material.Plastic
+            props.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+            props.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+            if name == "Part" then
+                props.Shape = Enum.PartType.Block
             end
-        elseif name == "UICorner" then
-            dumperState.property_store[proxy].CornerRadius = UDim.new(0, 0)
-        elseif name == "Motor6D" then
-            dumperState.property_store[proxy].C0 = CFrame.new()
-            dumperState.property_store[proxy].C1 = CFrame.new()
-        elseif name == "Part" then
-            dumperState.property_store[proxy].Position = Vector3.new(0, 0, 0)
-            dumperState.property_store[proxy].Anchored = true
-            dumperState.property_store[proxy].Shape = Enum.PartType.Block
-        elseif name == "Camera" then
-            dumperState.property_store[proxy].NearPlaneZ = -0.1
-        elseif name == "StringValue" then
-            dumperState.property_store[proxy].Value = ""
-        elseif name == "IntValue" or name == "NumberValue" then
-            dumperState.property_store[proxy].Value = 0
-        elseif name == "BoolValue" then
-            dumperState.property_store[proxy].Value = false
-        elseif name == "ObjectValue" then
-            dumperState.property_store[proxy].Value = nil
-        elseif name == "CFrameValue" then
-            dumperState.property_store[proxy].Value = CFrame.new()
-        elseif name == "Vector3Value" then
-            dumperState.property_store[proxy].Value = Vector3.new()
-        elseif name == "Color3Value" then
-            dumperState.property_store[proxy].Value = Color3.new()
         end
+        if classIsA(name, "GuiBase2d") then
+            props.AbsolutePosition = Vector2.new(0, 0)
+            props.AbsoluteSize = (name == "Frame" or name == "ScrollingFrame") and Vector2.new(960, 540) or Vector2.new(100, 50)
+            props.AbsoluteRotation = 0
+            props.AutoLocalize = true
+        end
+        if classIsA(name, "GuiObject") then
+            props.Position = UDim2.new(0, 0, 0, 0)
+            props.Size = UDim2.new(0, 100, 0, 50)
+            props.AnchorPoint = Vector2.new(0, 0)
+            props.Visible = true
+            props.ZIndex = 1
+            props.LayoutOrder = 0
+            props.Rotation = 0
+            props.BackgroundColor3 = Color3.new(1, 1, 1)
+            props.BackgroundTransparency = 0
+            props.BorderColor3 = Color3.fromRGB(27, 42, 53)
+            props.BorderSizePixel = 1
+            props.Active = false
+            props.ClipsDescendants = false
+            props.Selectable = false
+            props.SizeConstraint = Enum.SizeConstraint.RelativeXY
+            props.AutomaticSize = Enum.AutomaticSize.None
+            props.BorderMode = Enum.BorderMode.Outline
+        end
+        if name == "TextLabel" or name == "TextButton" or name == "TextBox" then
+            props.Text = ""
+            props.TextSize = 14
+            props.TextTransparency = 0
+            props.TextColor3 = Color3.new(0, 0, 0)
+            props.TextBounds = Vector2.new(100, 18)
+            props.Font = Enum.Font.SourceSans
+            props.TextXAlignment = Enum.TextXAlignment.Center
+            props.TextYAlignment = Enum.TextYAlignment.Center
+            if name == "TextBox" then props.ClearTextOnFocus = true end
+        elseif name == "Model" then
+            props.PrimaryPart = nil
+            props.WorldPivot = CFrame.new(0, 0, 0)
+        elseif name == "Sound" then
+            props.PlaybackLoudness = 1
+        elseif name == "UICorner" then
+            props.CornerRadius = UDim.new(0, 0)
+        elseif name == "Motor6D" then
+            props.C0 = CFrame.new()
+            props.C1 = CFrame.new()
+        elseif name == "Camera" then
+            props.NearPlaneZ = -0.1
+            props.FieldOfView = 70
+            props.CFrame = CFrame.new(0, 0, 0)
+            props.Focus = CFrame.new(0, 0, 0)
+            props.CameraType = Enum.CameraType.Custom
+            props.ViewportSize = Vector2.new(1920, 1080)
+        elseif name == "StringValue" then
+            props.Value = ""
+        elseif name == "IntValue" or name == "NumberValue" then
+            props.Value = 0
+        elseif name == "BoolValue" then
+            props.Value = false
+        elseif name == "ObjectValue" then
+            props.Value = nil
+        elseif name == "CFrameValue" then
+            props.Value = CFrame.new()
+        elseif name == "Vector3Value" then
+            props.Value = Vector3.new()
+        elseif name == "Color3Value" then
+            props.Value = Color3.new()
+        end
+        dumperState.property_store[proxy] = props
         _at.propertyDefaults[proxy] = {Transparency = 0}
         _at.propertyModified[proxy] = {}
         if parent then
